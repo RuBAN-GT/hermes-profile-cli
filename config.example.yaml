@@ -1,0 +1,31 @@
+# Copy outside this repository and pass the resulting path with --config,
+# or set HERMES_PROFILE_CONFIG to it.
+managed_dir: /opt/hermes/managed
+
+# These default to <managed_dir>/profiles and <managed_dir>/fragments when omitted.
+# Live Hermes homes can sit beside managed/, not inside it.
+profiles_dir: /opt/hermes/profiles
+fragments_dir: /opt/hermes/managed/fragments
+
+ui:
+  animations: true
+  theme: hermes-dracula
+
+# Additional local locations are independent profile/fragment roots on this host.
+# local_locations:
+#   lab:
+#     managed_dir: /srv/hermes/managed
+#     profiles_dir: /srv/hermes/managed/profiles
+#     fragments_dir: /srv/hermes/managed/fragments
+
+# Remote hosts are optional. SSH uses your agent, identity file, and known_hosts.
+# hosts:
+#   gateway-a:
+#     ssh_host: gateway.example
+#     ssh_user: deploy
+#     ssh_port: 22
+#     remote_binary: hermes-profile  # this manager, not the hermes agent
+#     remote_config: /opt/hermes/managed/config.yaml
+#     managed_dir: /opt/hermes/managed
+#     profiles_dir: /opt/hermes/profiles
+#     fragments_dir: /opt/hermes/managed/fragments

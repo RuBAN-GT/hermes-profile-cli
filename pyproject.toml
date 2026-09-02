@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-profile-cli"
+dynamic = ["version"]
+description = "Declarative TUI/CLI manager for isolated Hermes agent profiles over local paths and SSH"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PyYAML>=6.0.2",
+  "textual>=6.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "ruff>=0.11",
+]
+
+[project.scripts]
+hermes-profile = "hermes_profile.cli:main"
+
+[tool.hatch.version]
+path = "src/hermes_profile/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hermes_profile"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

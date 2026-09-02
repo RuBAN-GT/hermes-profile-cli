@@ -1,0 +1,51 @@
+from textual.theme import Theme
+
+THEMES = (
+    Theme(
+        name="hermes-dracula",
+        primary="#bd93f9",
+        secondary="#6272a4",
+        accent="#8be9fd",
+        foreground="#f8f8f2",
+        background="#282a36",
+        surface="#21222c",
+        panel="#44475a",
+        success="#50fa7b",
+        warning="#ffb86c",
+        error="#ff5555",
+        dark=True,
+        variables={"footer-key-foreground": "#f8f8f2"},
+    ),
+    Theme(
+        name="hermes-nord",
+        primary="#88c0d0",
+        secondary="#4c566a",
+        accent="#b48ead",
+        foreground="#eceff4",
+        background="#2e3440",
+        surface="#3b4252",
+        panel="#434c5e",
+        success="#a3be8c",
+        warning="#ebcb8b",
+        error="#bf616a",
+        dark=True,
+        variables={"footer-key-foreground": "#eceff4"},
+    ),
+    Theme(
+        name="hermes-gruvbox",
+        primary="#83a598",
+        secondary="#665c54",
+        accent="#d3869b",
+        foreground="#ebdbb2",
+        background="#282828",
+        surface="#3c3836",
+        panel="#504945",
+        success="#b8bb26",
+        warning="#fabd2f",
+        error="#fb4934",
+        dark=True,
+        variables={"footer-key-foreground": "#ebdbb2"},
+    ),
+)
+
+THEME_NAMES = frozenset(theme.name for theme in THEMES)

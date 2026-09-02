@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+coverage.xml
+htmlcov/
+
+# Local manager configuration and all managed Hermes state stay outside Git.
+config.yaml
+profiles/
+fragments/
+state/
+*.local.yaml
+*.private.env
