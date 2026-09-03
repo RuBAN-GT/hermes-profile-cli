@@ -55,11 +55,16 @@ This is **not** the Hermes agent (`hermes`). Do not point `remote_binary` at
 hermes-profile tui
 ```
 
-It asks for an operational root and creates `~/.config/hermes-profile/config.yaml`
-plus empty `profiles/` and `fragments/` directories. For non-interactive setup:
+It first asks **this computer** or **SSH**, then lets you set manager config,
+managed, profiles, and fragments paths. Press `?` or `F1` for help. For
+non-interactive setup:
 
 ```bash
 hermes-profile init --managed-dir /absolute/path/to/hermes-managed
+hermes-profile init --managed-dir /srv/hermes/managed \
+  --profiles-dir /srv/hermes/homes \
+  --fragments-dir /srv/hermes/fragments
+hermes-profile help
 ```
 
 Copy `config.example.yaml` outside the repository if you want a hand-written
@@ -90,9 +95,16 @@ Remote layout:
 ~/.local/share/hermes-profile/venv/bin/hermes-profile
 ```
 
-The first-run TUI can do the same with **Create SSH setup, clone, and install
-CLI**. Use an SSH target such as `deploy@gateway.example -p 22`. The remote
-manager CLI field is `hermes-profile`, not the `hermes` agent.
+The first-run TUI can do the same after you choose SSH: **Create SSH setup,
+clone, and install CLI**. Use an SSH target such as
+`deploy@gateway.example -p 22`. The remote manager CLI field is
+`hermes-profile`, not the `hermes` agent.
+
+Update this CLI (git fetch of `main`, then reinstall into the current Python):
+
+```bash
+hermes-profile self-update
+```
 
 ## Layout
 
@@ -138,6 +150,8 @@ hermes-profile reconcile tyrion
 hermes-profile apply tyrion
 hermes-profile delete tyrion --confirm
 hermes-profile tui
+hermes-profile help
+hermes-profile self-update
 ```
 
 `apply` refuses to overwrite `config.yaml` or `.env` when they differ from the

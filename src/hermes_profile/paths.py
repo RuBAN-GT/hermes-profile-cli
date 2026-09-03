@@ -18,21 +18,32 @@ def config_path(value: str | None) -> Path:
 
 
 def initialize_settings(
-    path: Path, managed_dir: Path, hosts: dict[str, Host] | None = None
+    path: Path,
+    managed_dir: Path,
+    hosts: dict[str, Host] | None = None,
+    *,
+    profiles_dir: Path | None = None,
+    fragments_dir: Path | None = None,
 ) -> Settings:
     """Create the first local configuration and its empty operational layout."""
     if path.exists():
         raise ValueError(f"manager config already exists: {path}")
-    managed_dir = managed_dir.expanduser()
-    if not managed_dir.is_absolute() or ".." in managed_dir.parts:
-        raise ValueError("managed_dir must be an absolute path without '..'")
+    managed_dir = _absolute_dir(managed_dir, "managed_dir")
+    profiles_dir = _absolute_dir(
+        managed_dir / "profiles" if profiles_dir is None else profiles_dir,
+        "profiles_dir",
+    )
+    fragments_dir = _absolute_dir(
+        managed_dir / "fragments" if fragments_dir is None else fragments_dir,
+        "fragments_dir",
+    )
     validated_hosts = _load_hosts(
         {alias: _host_data(host) for alias, host in (hosts or {}).items()}
     )
     settings = Settings(
         managed_dir=managed_dir,
-        profiles_dir=managed_dir / "profiles",
-        fragments_dir=managed_dir / "fragments",
+        profiles_dir=profiles_dir,
+        fragments_dir=fragments_dir,
         hosts=validated_hosts,
     )
     for directory in (
@@ -296,6 +307,20 @@ def fragment_path(settings: Settings, reference: str) -> Path:
     root = settings.fragments_dir.resolve()
     if path != root and root not in path.parents:
         raise ValueError(f"fragment escapes fragments_dir: {reference}")
+    return path
+
+
+def derived_child(managed: Path, previous: Path, current: str, name: str) -> str:
+    text = current.strip()
+    if not text or Path(text).expanduser() == previous / name:
+        return str(managed.expanduser() / name)
+    return current
+
+
+def _absolute_dir(path: Path, name: str) -> Path:
+    path = path.expanduser()
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{name} must be an absolute path without '..'")
     return path
 
 

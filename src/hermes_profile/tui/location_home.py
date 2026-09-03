@@ -7,6 +7,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Static
 
+from hermes_profile.tui.help import HelpScreen
+
 if TYPE_CHECKING:
     from hermes_profile.tui.app import ProfileApp
 
@@ -72,6 +74,8 @@ class LocationHomeScreen(Screen[None]):
         Binding("d", "delete", "Remove"),
         Binding("e", "edit", "Edit"),
         Binding("i", "init", "Init remote"),
+        Binding("question_mark", "help", "Help", key_display="?"),
+        Binding("f1", "help", "Help", show=False),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -86,7 +90,7 @@ class LocationHomeScreen(Screen[None]):
             with Vertical(id="location-header"):
                 yield Label("Where do you want to work?", id="location-title")
                 yield Label(
-                    "↑↓ choose a location · Enter opens profiles · a adds another",
+                    "↑↓ choose · Enter opens · a add · e edit · ? help",
                     id="location-subtitle",
                 )
             with Horizontal(id="location-body"):
@@ -149,6 +153,9 @@ class LocationHomeScreen(Screen[None]):
         if action == "edit" and self.selected == "local":
             return False
         return True
+
+    def action_help(self) -> None:
+        self.app.push_screen(HelpScreen())
 
     def action_quit(self) -> None:
         self.app.exit()

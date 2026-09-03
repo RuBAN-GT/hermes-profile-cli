@@ -22,7 +22,8 @@ from hermes_profile.models import Settings
 from hermes_profile.paths import delete_location, load_settings, set_theme
 from hermes_profile.profiles import list_profiles
 from hermes_profile.themes import THEMES
-from hermes_profile.transport import LocalTransport, SshTransport
+from hermes_profile.transport import SSH_TIMEOUT_SECONDS, LocalTransport, SshTransport
+from hermes_profile.tui.help import HelpScreen
 from hermes_profile.tui.location_home import LocationHomeScreen
 from hermes_profile.tui.location_setup import (
     ConfirmScreen,
@@ -47,6 +48,53 @@ WORKSPACE_ACTIONS = {
     "create_profile",
     "init_remote",
 }
+
+
+def preview_kind(value: object) -> tuple[str, str]:
+    if isinstance(value, dict):
+        return "map", f"{len(value)} key(s)"
+    if isinstance(value, list):
+        return "list", f"{len(value)} item(s)"
+    if isinstance(value, bool):
+        return "bool", "true" if value else "false"
+    if value is None:
+        return "null", "—"
+    if isinstance(value, (int, float)):
+        return "number", str(value)
+    if isinstance(value, str):
+        text = value.replace("\n", " ")
+        if len(text) > 40:
+            text = f"{text[:37]}..."
+        return "string", text
+    return "value", "—"
+
+
+def preview_rows(config: object) -> list[tuple[str, str, str]]:
+    if not isinstance(config, dict) or not config:
+        return [("—", "empty", "no config keys")]
+    return [(key, *preview_kind(value)) for key, value in sorted(config.items())]
+
+
+def format_preview(name: str, config: object, env_count: object) -> str:
+    rows = preview_rows(config)
+    key_width = max((len(key) for key, _, _ in rows), default=3)
+    key_width = min(max(key_width, 8), 28)
+    lines = [
+        f"[b]{name}[/]  preview",
+        "",
+        f"{'Key':<{key_width}}  {'Kind':<6}  Contents",
+        f"{'─' * key_width}  {'─' * 6}  {'─' * 8}",
+    ]
+    for key, kind, contents in rows:
+        display = key if len(key) <= key_width else f"{key[: key_width - 1]}…"
+        lines.append(f"{display:<{key_width}}  {kind:<6}  {contents}")
+    lines.extend(
+        [
+            "",
+            f"Environment: {env_count} variable(s), values redacted",
+        ]
+    )
+    return "\n".join(lines)
 
 
 class ProfileTransport(Protocol):
@@ -148,6 +196,8 @@ class ProfileApp(App[None]):
         Binding("c", "reconcile", "Reconcile"),
         Binding("a", "apply", "Apply"),
         Binding("i", "init_remote", "Init remote"),
+        Binding("question_mark", "help", "Help", key_display="?"),
+        Binding("f1", "help", "Help", show=False),
     ]
 
     def __init__(self, settings: Settings, config: Path) -> None:
@@ -207,7 +257,7 @@ class ProfileApp(App[None]):
             set_theme(self.config, theme)
 
     def action_refresh(self) -> None:
-        self.query_one("#loading", LoadingIndicator).display = self.settings.animations
+        self._set_busy(f"{self.location_title} · loading profiles...")
         self.load_profiles()
 
     def action_preview(self) -> None:
@@ -238,6 +288,9 @@ class ProfileApp(App[None]):
 
     def action_create_profile(self) -> None:
         self.push_screen(CreateProfileScreen(), self._profile_created)
+
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-locations":
@@ -281,7 +334,7 @@ class ProfileApp(App[None]):
             self._handle_remote_init(event)
 
     async def _handle_profile_load(self, event: Worker.StateChanged) -> None:
-        self.query_one("#loading", LoadingIndicator).display = False
+        self._set_busy(None)
         if event.state == WorkerState.ERROR:
             await self.query_one("#profiles", ListView).clear()
             self._show_load_error(event.worker.error)
@@ -344,6 +397,9 @@ class ProfileApp(App[None]):
         )
 
     def _handle_operation(self, event: Worker.StateChanged) -> None:
+        if event.state not in {WorkerState.ERROR, WorkerState.SUCCESS}:
+            return
+        self._set_busy(None)
         if event.state == WorkerState.ERROR:
             message = str(event.worker.error)
             self.query_one("#summary", Label).update(
@@ -353,31 +409,48 @@ class ProfileApp(App[None]):
                 f"[b]Action failed[/]\n\n{message}\n\n[dim]r to retry[/]"
             )
             return
-        if event.state != WorkerState.SUCCESS:
-            return
         name, action, result = event.worker.result
         if action == "render":
-            keys = ", ".join(sorted(result["config"])) or "no config keys"
             self.query_one("#profile-detail", Static).update(
-                f"[b]{name}[/]  preview\n\n"
-                f"Top-level config: {keys}\n"
-                f"Environment: {result['environment_count']} variable(s), "
-                "values redacted"
+                format_preview(
+                    name,
+                    result.get("config"),
+                    result.get("environment_count", 0),
+                )
             )
+            self.query_one("#summary", Label).update(f"{name} · preview")
             self.notify(f"Previewed {name}")
-        else:
-            self.notify(f"{name}: {action} completed")
-            self.query_one("#summary", Label).update(f"{name}: {action} completed")
-            self.action_refresh()
+            return
+        self.notify(f"{name}: {action} completed")
+        self.query_one("#summary", Label).update(f"{name}: {action} completed")
+        self.action_refresh()
 
     def _start_action(self, action: str) -> None:
         if self.selected_profile is None:
             self.notify("Select a profile first.", severity="warning")
             return
-        self.query_one("#summary", Label).update(
-            f"{self.selected_profile}: {action} in progress..."
+        remote = self.selected_host.startswith("ssh--")
+        via = " over SSH" if remote else ""
+        hint = (
+            f"\n\n[dim]Remote commands wait up to {SSH_TIMEOUT_SECONDS}s "
+            "before timing out.[/]"
+            if remote
+            else ""
+        )
+        self._set_busy(
+            f"{self.selected_profile}: {action} in progress...",
+            f"[b]{self.selected_profile}[/]  {action}\n\nWorking{via}...{hint}",
         )
         self.run_profile_operation(self.selected_profile, action)
+
+    def _set_busy(self, summary: str | None, detail: str | None = None) -> None:
+        self.query_one("#loading", LoadingIndicator).display = (
+            summary is not None and self.settings.animations
+        )
+        if summary is not None:
+            self.query_one("#summary", Label).update(summary)
+        if detail is not None:
+            self.query_one("#profile-detail", Static).update(detail)
 
     def _show_status(self, name: str, current: dict[str, bool]) -> None:
         lines = [f"[b]{name}[/]", ""]
@@ -552,12 +625,13 @@ class ProfileApp(App[None]):
 
     def _start_remote_init(self, alias: str) -> None:
         host = self.settings.hosts[alias]
-        self.query_one("#loading", LoadingIndicator).display = self.settings.animations
-        self.query_one("#summary", Label).update(f"{alias}: initializing remote...")
-        self.query_one("#profile-detail", Static).update(
+        self._set_busy(
+            f"{alias}: initializing remote...",
             f"[b]Initializing {alias}[/]\n\n"
             f"Creating {host.remote_config} and managed dirs over SSH.\n"
-            "This does not install hermes-profile."
+            "This does not install hermes-profile.\n\n"
+            f"[dim]Remote commands wait up to {SSH_TIMEOUT_SECONDS}s "
+            "before timing out.[/]",
         )
         self.run_remote_init(alias)
 
@@ -567,7 +641,7 @@ class ProfileApp(App[None]):
         return alias
 
     def _handle_remote_init(self, event: Worker.StateChanged) -> None:
-        self.query_one("#loading", LoadingIndicator).display = False
+        self._set_busy(None)
         if event.state == WorkerState.ERROR:
             message = str(event.worker.error)
             self.query_one("#summary", Label).update(

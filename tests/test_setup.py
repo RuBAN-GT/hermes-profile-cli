@@ -5,6 +5,7 @@ import pytest
 from hermes_profile.models import Host, LocalLocation
 from hermes_profile.paths import (
     delete_location,
+    derived_child,
     initialize_settings,
     load_settings,
     upsert_host,
@@ -23,6 +24,36 @@ def test_initialize_creates_config_and_operational_layout(tmp_path: Path) -> Non
     assert settings.fragments_dir.is_dir()
     assert config.stat().st_mode & 0o777 == 0o600
     assert managed.stat().st_mode & 0o777 == 0o700
+
+
+def test_initialize_accepts_custom_profiles_and_fragments(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    managed = tmp_path / "managed"
+    profiles = tmp_path / "homes"
+    fragments = tmp_path / "shared" / "fragments"
+
+    settings = initialize_settings(
+        config,
+        managed,
+        profiles_dir=profiles,
+        fragments_dir=fragments,
+    )
+
+    loaded = load_settings(str(config))
+    assert settings.profiles_dir == profiles
+    assert loaded.profiles_dir == profiles
+    assert loaded.fragments_dir == fragments
+    assert profiles.is_dir()
+    assert fragments.is_dir()
+
+
+def test_derived_child_follows_managed_until_edited(tmp_path: Path) -> None:
+    previous = tmp_path / "old"
+    managed = tmp_path / "new"
+    followed = derived_child(managed, previous, str(previous / "profiles"), "profiles")
+    custom = derived_child(managed, previous, str(tmp_path / "custom"), "profiles")
+    assert followed == str(managed / "profiles")
+    assert custom == str(tmp_path / "custom")
 
 
 def test_initialize_refuses_to_overwrite_existing_config(tmp_path: Path) -> None:

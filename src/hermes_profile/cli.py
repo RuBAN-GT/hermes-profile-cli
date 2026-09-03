@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from hermes_profile import __version__
+from hermes_profile.helptext import HELP_TEXT
 from hermes_profile.models import Profile, Settings
 from hermes_profile.paths import (
     config_path,
@@ -22,6 +23,7 @@ from hermes_profile.profiles import (
     list_profiles,
     load_profile,
 )
+from hermes_profile.self_update import self_update
 from hermes_profile.service import apply, reconcile, render_profile, status
 from hermes_profile.transport import SshTransport, remote_arguments
 
@@ -31,21 +33,39 @@ def main(argv: list[str] | None = None) -> None:
     parser = _parser()
     arguments = parser.parse_args(original)
     try:
+        if arguments.command == "help":
+            print(HELP_TEXT)
+            return
+        if arguments.command == "self-update":
+            _emit(self_update(), arguments.format)
+            return
         path = config_path(arguments.config)
         if arguments.command == "init":
-            settings = initialize_settings(path, arguments.managed_dir)
+            settings = initialize_settings(
+                path,
+                arguments.managed_dir,
+                profiles_dir=arguments.profiles_dir,
+                fragments_dir=arguments.fragments_dir,
+            )
             _emit(
-                {"initialized": str(path), "managed_dir": str(settings.managed_dir)},
+                {
+                    "initialized": str(path),
+                    "managed_dir": str(settings.managed_dir),
+                    "profiles_dir": str(settings.profiles_dir),
+                    "fragments_dir": str(settings.fragments_dir),
+                },
                 arguments.format,
             )
             return
         if arguments.command == "tui" and not path.is_file():
             from hermes_profile.tui.setup import SetupApp
 
-            SetupApp(path).run()
+            created = SetupApp(path).run()
+            if created is not None:
+                path = created
             if not path.is_file():
                 return
-        settings = load_settings(arguments.config)
+        settings = load_settings(str(path))
         result = _dispatch(arguments, original, settings, path)
         if result is not None:
             _emit(result, arguments.format)
@@ -60,14 +80,28 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", help="configured remote host alias")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     commands = parser.add_subparsers(dest="command", required=True)
-    initialize = commands.add_parser("init")
+    initialize = commands.add_parser(
+        "init", help="create manager config and directories"
+    )
     initialize.add_argument(
         "--managed-dir",
         type=lambda value: Path(value).expanduser(),
         default=Path("~/.local/share/hermes-profile/managed").expanduser(),
         help="local operational root for profiles and fragments",
     )
-    commands.add_parser("list")
+    initialize.add_argument(
+        "--profiles-dir",
+        type=lambda value: Path(value).expanduser(),
+        default=None,
+        help="profile homes; defaults to <managed-dir>/profiles",
+    )
+    initialize.add_argument(
+        "--fragments-dir",
+        type=lambda value: Path(value).expanduser(),
+        default=None,
+        help="shared fragments; defaults to <managed-dir>/fragments",
+    )
+    commands.add_parser("list", help="list profile names")
     create = commands.add_parser("create")
     create.add_argument("name")
     show = commands.add_parser("show")
@@ -100,7 +134,12 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("doctor", "init", "install"):
         command = ssh_subcommands.add_parser(name)
         command.add_argument("host")
-    commands.add_parser("tui")
+    commands.add_parser("tui", help="open the profile manager TUI")
+    commands.add_parser("help", help="show command and TUI help")
+    commands.add_parser(
+        "self-update",
+        help="update this CLI from git and reinstall into the current Python",
+    )
     return parser
 
 

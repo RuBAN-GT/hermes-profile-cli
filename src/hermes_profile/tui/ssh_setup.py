@@ -29,7 +29,7 @@ class SshSetupScreen(ModalScreen[bool]):
         padding: 1 2;
     }
     #ssh-title { text-style: bold; color: $primary; height: 1; }
-    #ssh-subtitle { color: $secondary; height: 1; margin-bottom: 1; }
+    #ssh-subtitle, .hint { color: $secondary; margin-bottom: 1; }
     #ssh-fields { height: 1fr; }
     #ssh-error { color: $error; height: 2; }
     Input { margin: 1 0; border: round $secondary; }
@@ -69,6 +69,7 @@ class SshSetupScreen(ModalScreen[bool]):
             )
             with VerticalScroll(id="ssh-fields"):
                 yield Label("Location alias")
+                yield Label("Short TUI name, e.g. gateway-a.", classes="hint")
                 yield Input(
                     value=self.host.alias if self.host else "",
                     placeholder="gateway-a",
@@ -76,6 +77,7 @@ class SshSetupScreen(ModalScreen[bool]):
                     disabled=editing,
                 )
                 yield Label("SSH target")
+                yield Label("user@host, optional -p PORT.", classes="hint")
                 yield Input(
                     value=self._target_value(),
                     placeholder="deploy@gateway.example -p 22",
@@ -92,6 +94,7 @@ class SshSetupScreen(ModalScreen[bool]):
                     id="ssh-port",
                 )
                 yield Label("Remote managed directory")
+                yield Label("Operational root on the remote host.", classes="hint")
                 yield Input(
                     value=str(self.host.managed_dir) if self.host else "",
                     placeholder="/opt/hermes/managed",
@@ -110,6 +113,10 @@ class SshSetupScreen(ModalScreen[bool]):
                     id="remote-fragments-dir",
                 )
                 yield Label("Remote manager CLI (optional, not the hermes agent)")
+                yield Label(
+                    "hermes-profile binary or PATH name. Not the hermes agent.",
+                    classes="hint",
+                )
                 yield Input(
                     value=(
                         self.host.remote_binary if self.host else DEFAULT_REMOTE_BINARY

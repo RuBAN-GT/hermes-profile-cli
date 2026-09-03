@@ -1,14 +1,16 @@
 import asyncio
 from pathlib import Path
 
-from textual.widgets import Label, ListView, Static
+from textual.widgets import Input, Label, ListView, Static
 
 from hermes_profile.models import LocalLocation, Settings
 from hermes_profile.paths import initialize_settings, upsert_local_location
 from hermes_profile.profiles import create_profile
 from hermes_profile.transport import LocalTransport
-from hermes_profile.tui.app import ProfileApp
+from hermes_profile.tui.app import ProfileApp, format_preview, preview_rows
+from hermes_profile.tui.help import HelpScreen
 from hermes_profile.tui.location_home import LocationHomeScreen
+from hermes_profile.tui.setup import LocalSetupScreen, SetupApp
 
 
 def test_tui_location_home_lists_local_and_opens_profiles(tmp_path: Path) -> None:
@@ -131,5 +133,115 @@ def test_tui_load_error_replaces_loading_copy(tmp_path: Path) -> None:
             assert "unavailable" in summary
             assert "Could not open" in detail
             assert "Loading" not in detail
+
+    asyncio.run(run())
+
+
+def test_preview_rows_describe_top_level_keys() -> None:
+    rows = preview_rows({"agent": {"model": "x"}, "plugins": ["a", "b"], "flag": True})
+    assert rows == [
+        ("agent", "map", "1 key(s)"),
+        ("flag", "bool", "true"),
+        ("plugins", "list", "2 item(s)"),
+    ]
+
+
+def test_format_preview_is_tabular() -> None:
+    text = format_preview("tyrion", {"agent": {"model": "x"}}, 33)
+    assert "tyrion" in text
+    assert "Key" in text
+    assert "agent" in text
+    assert "map" in text
+    assert "33 variable" in text
+    assert "Top-level config:" not in text
+
+
+def test_setup_asks_local_or_remote_first(tmp_path: Path) -> None:
+    app = SetupApp(tmp_path / "config.yaml")
+
+    async def run() -> None:
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            assert app.query_one("#choose-local")
+            assert app.query_one("#choose-ssh")
+            assert not app.query("#local-managed-dir")
+            await pilot.click("#choose-local")
+            await pilot.pause()
+            assert isinstance(app.screen, LocalSetupScreen)
+            assert app.screen.query_one("#local-managed-dir")
+            assert app.screen.query_one("#local-profiles-dir")
+            assert app.screen.query_one("#local-fragments-dir")
+            assert not app.screen.query("#host-alias")
+            await pilot.click("#back-setup")
+            await pilot.pause()
+            assert app.query_one("#choose-local")
+            await pilot.click("#choose-ssh")
+            await pilot.pause()
+            assert app.screen.query_one("#host-alias")
+            assert not app.screen.query("#choose-local")
+
+    asyncio.run(run())
+
+
+def test_setup_local_creates_config(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    managed = tmp_path / "managed"
+    app = SetupApp(config)
+
+    async def run() -> None:
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            await pilot.click("#choose-local")
+            await pilot.pause()
+            app.screen.query_one("#local-managed-dir", Input).value = str(managed)
+            await pilot.pause()
+            await pilot.click("#local")
+            await pilot.pause()
+
+    asyncio.run(run())
+    assert config.is_file()
+    assert (managed / "profiles").is_dir()
+    assert (managed / "fragments").is_dir()
+
+
+def test_setup_local_custom_paths(tmp_path: Path) -> None:
+    default = tmp_path / "default.yaml"
+    config = tmp_path / "elsewhere" / "config.yaml"
+    managed = tmp_path / "managed"
+    profiles = tmp_path / "homes"
+    fragments = tmp_path / "snips"
+    app = SetupApp(default)
+
+    async def run() -> None:
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            await pilot.click("#choose-local")
+            await pilot.pause()
+            app.screen.query_one("#local-config", Input).value = str(config)
+            app.screen.query_one("#local-managed-dir", Input).value = str(managed)
+            await pilot.pause()
+            app.screen.query_one("#local-profiles-dir", Input).value = str(profiles)
+            app.screen.query_one("#local-fragments-dir", Input).value = str(fragments)
+            await pilot.click("#local")
+            await pilot.pause()
+
+    asyncio.run(run())
+    assert config.is_file()
+    assert not default.exists()
+    assert profiles.is_dir()
+    assert fragments.is_dir()
+
+
+def test_tui_help_opens_guide(tmp_path: Path) -> None:
+    root = tmp_path / "managed"
+    settings = Settings(root, root / "profiles", root / "fragments")
+    app = ProfileApp(settings, tmp_path / "config.yaml")
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("f1")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
 
     asyncio.run(run())

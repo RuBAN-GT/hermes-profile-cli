@@ -1,121 +1,344 @@
 from dataclasses import replace
 from pathlib import Path
 
+from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Button, Footer, Input, Label
+from textual.binding import Binding
+from textual.containers import Vertical, VerticalScroll
+from textual.screen import Screen
+from textual.widgets import Button, Footer, Input, Label, LoadingIndicator
+from textual.worker import Worker, WorkerState
 
 from hermes_profile.models import Host
-from hermes_profile.paths import initialize_settings, upsert_host
+from hermes_profile.paths import derived_child, initialize_settings, upsert_host
 from hermes_profile.transport import (
     DEFAULT_REMOTE_BINARY,
+    INSTALL_TIMEOUT_SECONDS,
+    SSH_TIMEOUT_SECONDS,
     SshTransport,
     normalize_remote_binary,
     parse_ssh_target,
 )
+from hermes_profile.tui.help import HelpScreen
+
+DEFAULT_LOCAL_MANAGED = Path("~/.local/share/hermes-profile/managed").expanduser()
+
+SETUP_CSS = """
+Screen { align: center middle; background: #282a36; color: #f8f8f2; }
+Footer { background: #44475a; color: #f8f8f2; }
+FooterKey { background: #6272a4; color: #f8f8f2; }
+#setup {
+    width: 84;
+    height: auto;
+    padding: 2;
+    border: tall #bd93f9;
+    background: #21222c;
+}
+#setup-title { text-style: bold; }
+#setup-subtitle { color: #6272a4; margin-bottom: 1; }
+#setup-fields { height: auto; max-height: 22; }
+#setup-hint, .hint { color: #6272a4; }
+#error { color: #ff5555; height: 3; }
+#setup-loading { height: 1; margin: 1 0; }
+Input { margin: 1 0; border: tall #6272a4; background: #282a36; color: #f8f8f2; }
+Input:focus { border: tall #8be9fd; }
+Button {
+    margin-top: 1;
+    border: tall #6272a4;
+    background: #44475a;
+    color: #f8f8f2;
+    text-style: bold;
+    width: 100%;
+}
+Button:hover { background: #bd93f9; color: #282a36; }
+#choose-local, #local { border: tall #50fa7b; color: #50fa7b; }
+#choose-ssh, #ssh { border: tall #8be9fd; color: #8be9fd; }
+#ssh-clone { border: tall #ff79c6; color: #ff79c6; }
+#back-setup { border: tall #6272a4; color: #f8f8f2; }
+#choose-local:hover, #local:hover { background: #50fa7b; color: #282a36; }
+#choose-ssh:hover, #ssh:hover { background: #8be9fd; color: #282a36; }
+#ssh-clone:hover { background: #ff79c6; color: #282a36; }
+#back-setup:hover { background: #6272a4; color: #f8f8f2; }
+"""
 
 
-class SetupApp(App[None]):
+class SetupApp(App[Path | None]):
     """First-run setup for a local or SSH-managed Hermes installation."""
 
-    CSS = """
-    Screen { align: center middle; background: #282a36; color: #f8f8f2; }
-    Footer { background: #44475a; color: #f8f8f2; }
-    FooterKey { background: #6272a4; color: #f8f8f2; }
-    #setup {
-        width: 84;
-        height: auto;
-        padding: 2;
-        border: tall #bd93f9;
-        background: #21222c;
-    }
-    #error { color: #ff5555; height: 3; }
-    Input { margin: 1 0; border: tall #6272a4; background: #282a36; color: #f8f8f2; }
-    Input:focus { border: tall #8be9fd; }
-    Button {
-        margin-right: 1;
-        border: tall #6272a4;
-        background: #44475a;
-        color: #f8f8f2;
-        text-style: bold;
-    }
-    Button:hover { background: #bd93f9; color: #282a36; }
-    #local { border: tall #50fa7b; color: #50fa7b; }
-    #ssh { border: tall #8be9fd; color: #8be9fd; }
-    #ssh-clone { border: tall #ff79c6; color: #ff79c6; }
-    #local:hover { background: #50fa7b; color: #282a36; }
-    #ssh:hover { background: #8be9fd; color: #282a36; }
-    #ssh-clone:hover { background: #ff79c6; color: #282a36; }
-    """
+    CSS = SETUP_CSS
     TITLE = "Hermes Profile Setup"
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+        Binding("question_mark", "help", "Help", key_display="?"),
+        Binding("f1", "help", "Help", show=False),
+    ]
 
     def __init__(self, config: Path) -> None:
         super().__init__()
         self.config = config
 
     def compose(self) -> ComposeResult:
-        local_root = Path("~/.local/share/hermes-profile/managed").expanduser()
         with Vertical(id="setup"):
-            yield Label("Set up Hermes Profile Manager")
-            yield Label(f"Local configuration: {self.config}")
+            yield Label("Set up Hermes Profile Manager", id="setup-title")
+            yield Label("Where should profiles live?", id="setup-subtitle")
             yield Label(
-                "Local operational directory (required for local manager state):"
+                "This computer: profiles, fragments, and manager state stay here.",
+                classes="hint",
             )
-            yield Input(value=str(local_root), id="local-managed-dir")
-            yield Label("SSH setup (fill these fields only for a remote-first setup):")
-            yield Input(placeholder="gateway-a", id="host-alias")
-            yield Input(
-                placeholder="deploy@gateway.example -p 22",
-                id="ssh-target",
+            yield Button("This computer", id="choose-local")
+            yield Label(
+                "SSH: manage another host with your existing keys. "
+                "Passwords are not stored.",
+                classes="hint",
             )
-            yield Input(
-                placeholder="/opt/hermes/managed",
-                id="remote-managed-dir",
-            )
-            yield Label("Remote manager CLI (optional, not the hermes agent)")
-            yield Input(value=DEFAULT_REMOTE_BINARY, id="remote-binary")
-            yield Input(
-                placeholder="/opt/hermes/managed/config.yaml",
-                id="remote-config",
-            )
-            yield Label("", id="error")
-            yield Button("Create local setup", variant="primary", id="local")
-            yield Button("Create SSH setup and initialize remote", id="ssh")
-            yield Button("Create SSH setup, clone, and install CLI", id="ssh-clone")
+            yield Button("Another machine over SSH", id="choose-ssh")
+            yield Label("Press ? for full help.", classes="hint")
         yield Footer()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "local":
-            self._initialize_local()
-        elif event.button.id == "ssh":
-            self._initialize_ssh(install=False)
-        elif event.button.id == "ssh-clone":
-            self._initialize_ssh(install=True)
+        if event.button.id == "choose-local":
+            self.push_screen(LocalSetupScreen(self.config), self._setup_done)
+        elif event.button.id == "choose-ssh":
+            self.push_screen(RemoteSetupScreen(self.config), self._setup_done)
 
-    def _initialize_local(self) -> None:
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
+
+    def _setup_done(self, created: Path | None) -> None:
+        if created is not None:
+            self.exit(created)
+
+
+class _SetupForm(Screen[Path | None]):
+    CSS = SETUP_CSS
+    BINDINGS = [
+        Binding("escape", "back", "Back", key_display="esc"),
+        Binding("question_mark", "help", "Help", key_display="?"),
+        Binding("f1", "help", "Help", show=False),
+    ]
+
+    def __init__(self, config: Path) -> None:
+        super().__init__()
+        self.config = config
+
+    def action_back(self) -> None:
+        self.dismiss(None)
+
+    def action_help(self) -> None:
+        self.app.push_screen(HelpScreen())
+
+    def _path(self, identifier: str) -> Path:
+        return Path(self._value(identifier)).expanduser()
+
+    def _value(self, identifier: str) -> str:
+        return self.query_one(f"#{identifier}", Input).value.strip()
+
+    def _error(self, error: ValueError) -> None:
+        self.query_one("#error", Label).update(str(error))
+
+
+class LocalSetupScreen(_SetupForm):
+    def __init__(self, config: Path) -> None:
+        super().__init__(config)
+        self._managed = DEFAULT_LOCAL_MANAGED
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="setup"):
+            yield Label("Local setup", id="setup-title")
+            yield Label("Where files live on this machine:", id="setup-subtitle")
+            with VerticalScroll(id="setup-fields"):
+                yield Label("Manager config")
+                yield Label(
+                    "This YAML lists locations. Default is fine unless you "
+                    "already keep Hermes config elsewhere.",
+                    classes="hint",
+                )
+                yield Input(value=str(self.config), id="local-config")
+                yield Label("Managed directory")
+                yield Label(
+                    "Operational root. Profiles and fragments follow this path "
+                    "until you edit them.",
+                    classes="hint",
+                )
+                yield Input(value=str(DEFAULT_LOCAL_MANAGED), id="local-managed-dir")
+                yield Label("Profiles directory")
+                yield Label(
+                    "One folder per profile. Each later gets config.yaml, .env, "
+                    "and state/.",
+                    classes="hint",
+                )
+                yield Input(
+                    value=str(DEFAULT_LOCAL_MANAGED / "profiles"),
+                    id="local-profiles-dir",
+                )
+                yield Label("Fragments directory")
+                yield Label(
+                    "Shared YAML and env snippets. profile.yaml only stores "
+                    "relative references here.",
+                    classes="hint",
+                )
+                yield Input(
+                    value=str(DEFAULT_LOCAL_MANAGED / "fragments"),
+                    id="local-fragments-dir",
+                )
+                yield Label("", id="error")
+            yield Button("Create local setup", variant="primary", id="local")
+            yield Button("Back", id="back-setup")
+        yield Footer()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "local-managed-dir":
+            return
+        raw = event.value.strip() or str(DEFAULT_LOCAL_MANAGED)
+        managed = Path(raw).expanduser()
+        profiles = self.query_one("#local-profiles-dir", Input)
+        fragments = self.query_one("#local-fragments-dir", Input)
+        profiles.value = derived_child(
+            managed, self._managed, profiles.value, "profiles"
+        )
+        fragments.value = derived_child(
+            managed, self._managed, fragments.value, "fragments"
+        )
+        self._managed = managed
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back-setup":
+            self.dismiss(None)
+            return
+        if event.button.id != "local":
+            return
         try:
-            initialize_settings(self.config, self._path("local-managed-dir"))
+            config = self._path("local-config")
+            initialize_settings(
+                config,
+                self._path("local-managed-dir"),
+                profiles_dir=self._path("local-profiles-dir"),
+                fragments_dir=self._path("local-fragments-dir"),
+            )
         except ValueError as error:
             self._error(error)
             return
-        self.exit()
+        self.dismiss(config)
 
-    def _initialize_ssh(self, install: bool) -> None:
+
+class RemoteSetupScreen(_SetupForm):
+    def compose(self) -> ComposeResult:
+        with Vertical(id="setup"):
+            yield Label("Remote SSH setup", id="setup-title")
+            yield Label(
+                "This still writes a local manager config, then talks to the host.",
+                id="setup-subtitle",
+            )
+            with VerticalScroll(id="setup-fields"):
+                yield Label("Local manager config")
+                yield Label(
+                    "Saved on this machine. Lists the SSH location.",
+                    classes="hint",
+                )
+                yield Input(value=str(self.config), id="local-config")
+                yield Label("Local managed directory")
+                yield Label(
+                    "Local operational root. Needed even for a remote-first setup.",
+                    classes="hint",
+                )
+                yield Input(value=str(DEFAULT_LOCAL_MANAGED), id="local-managed-dir")
+                yield Label("Location alias")
+                yield Label(
+                    "Short name shown in the TUI, e.g. gateway-a.",
+                    classes="hint",
+                )
+                yield Input(placeholder="gateway-a", id="host-alias")
+                yield Label("SSH target")
+                yield Label(
+                    "user@host, optional -p PORT. Uses your SSH agent and keys.",
+                    classes="hint",
+                )
+                yield Input(
+                    placeholder="deploy@gateway.example -p 22",
+                    id="ssh-target",
+                )
+                yield Label("Remote managed directory")
+                yield Label(
+                    "Operational root on the remote host. Profiles/fragments "
+                    "default to children of this path.",
+                    classes="hint",
+                )
+                yield Input(
+                    placeholder="/opt/hermes/managed",
+                    id="remote-managed-dir",
+                )
+                yield Label("Remote manager CLI")
+                yield Label(
+                    "hermes-profile on the remote PATH or an absolute path. "
+                    "Not the hermes agent.",
+                    classes="hint",
+                )
+                yield Input(value=DEFAULT_REMOTE_BINARY, id="remote-binary")
+                yield Label("Remote manager config")
+                yield Label(
+                    "YAML on the remote host. Init creates it if missing.",
+                    classes="hint",
+                )
+                yield Input(
+                    placeholder="/opt/hermes/managed/config.yaml",
+                    id="remote-config",
+                )
+                yield LoadingIndicator(id="setup-loading")
+                yield Label("", id="error")
+            yield Button("Create SSH setup and initialize remote", id="ssh")
+            yield Button("Create SSH setup, clone, and install CLI", id="ssh-clone")
+            yield Button("Back", id="back-setup")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#setup-loading", LoadingIndicator).display = False
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back-setup":
+            self.dismiss(None)
+            return
+        if event.button.id == "ssh":
+            self._start_ssh(install=False)
+        elif event.button.id == "ssh-clone":
+            self._start_ssh(install=True)
+
+    def _start_ssh(self, install: bool) -> None:
         try:
             host = self._host()
-            initialize_settings(
-                self.config, self._path("local-managed-dir"), {host.alias: host}
-            )
-            transport = SshTransport(host)
-            if install:
-                result = transport.install()
-                upsert_host(self.config, replace(host, remote_binary=result["binary"]))
-            else:
-                transport.init()
+            managed = self._path("local-managed-dir")
+            self.config = self._path("local-config")
         except ValueError as error:
             self._error(error)
             return
-        self.exit()
+        limit = INSTALL_TIMEOUT_SECONDS if install else SSH_TIMEOUT_SECONDS
+        action = "Cloning and installing" if install else "Initializing remote"
+        self.query_one("#setup-loading", LoadingIndicator).display = True
+        self.query_one("#error", Label).update(f"{action} over SSH (up to {limit}s)...")
+        for button in self.query(Button):
+            button.disabled = True
+        self.run_remote_setup(host, managed, install)
+
+    @work(thread=True, exclusive=True, group="remote-setup", exit_on_error=False)
+    def run_remote_setup(self, host: Host, managed: Path, install: bool) -> None:
+        initialize_settings(self.config, managed, {host.alias: host})
+        transport = SshTransport(host)
+        if install:
+            result = transport.install()
+            upsert_host(self.config, replace(host, remote_binary=result["binary"]))
+            return
+        transport.init()
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.group != "remote-setup":
+            return
+        if event.state == WorkerState.ERROR:
+            self.query_one("#setup-loading", LoadingIndicator).display = False
+            for button in self.query(Button):
+                button.disabled = False
+            self._error(ValueError(str(event.worker.error)))
+            return
+        if event.state == WorkerState.SUCCESS:
+            self.dismiss(self.config)
 
     def _host(self) -> Host:
         alias = self._value("host-alias")
@@ -136,12 +359,3 @@ class SetupApp(App[None]):
             profiles_dir=managed_dir / "profiles",
             fragments_dir=managed_dir / "fragments",
         )
-
-    def _path(self, identifier: str) -> Path:
-        return Path(self._value(identifier)).expanduser()
-
-    def _value(self, identifier: str) -> str:
-        return self.query_one(f"#{identifier}", Input).value.strip()
-
-    def _error(self, error: ValueError) -> None:
-        self.query_one("#error", Label).update(str(error))
