@@ -1,7 +1,8 @@
 import asyncio
 from pathlib import Path
+from threading import Event
 
-from textual.widgets import Input, Label, ListView, Static
+from textual.widgets import Button, Input, Label, ListView, LoadingIndicator, Static
 
 from hermes_profile.models import LocalLocation, Settings
 from hermes_profile.paths import initialize_settings, upsert_local_location
@@ -11,6 +12,7 @@ from hermes_profile.tui.app import ProfileApp, format_preview, preview_rows
 from hermes_profile.tui.help import HelpScreen
 from hermes_profile.tui.location_home import LocationHomeScreen
 from hermes_profile.tui.setup import LocalSetupScreen, SetupApp
+from hermes_profile.tui.ssh_setup import SshSetupScreen
 
 
 def test_tui_location_home_lists_local_and_opens_profiles(tmp_path: Path) -> None:
@@ -243,5 +245,39 @@ def test_tui_help_opens_guide(tmp_path: Path) -> None:
             await pilot.press("f1")
             await pilot.pause()
             assert isinstance(app.screen, HelpScreen)
+
+    asyncio.run(run())
+
+
+def test_ssh_setup_runs_init_in_a_worker(tmp_path: Path, monkeypatch: object) -> None:
+    root = tmp_path / "managed"
+    config = tmp_path / "config.yaml"
+    settings = initialize_settings(config, root)
+    app = ProfileApp(settings, config)
+    started = Event()
+    finish = Event()
+
+    def slow_init(_transport: object) -> None:
+        started.set()
+        finish.wait(timeout=1)
+
+    monkeypatch.setattr("hermes_profile.tui.ssh_setup.SshTransport.init", slow_init)
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.push_screen(SshSetupScreen(config))
+            await pilot.pause()
+            screen = app.screen
+            screen.query_one("#host-alias", Input).value = "gateway-a"
+            screen.query_one("#ssh-target", Input).value = "deploy@gateway.example"
+            screen.query_one("#remote-managed-dir", Input).value = "/opt/hermes"
+            screen.query_one("#remote-config", Input).value = "/opt/hermes/config.yaml"
+            await pilot.click("#init-ssh")
+            await asyncio.sleep(0.05)
+            assert started.is_set()
+            assert screen.query_one("#ssh-loading", LoadingIndicator).display
+            assert all(button.disabled for button in screen.query(Button))
+            finish.set()
+            await pilot.pause()
 
     asyncio.run(run())

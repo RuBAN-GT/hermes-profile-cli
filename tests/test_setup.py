@@ -10,7 +10,9 @@ from hermes_profile.paths import (
     load_settings,
     upsert_host,
     upsert_local_location,
+    write_private,
 )
+from hermes_profile.profiles import create_profile
 
 
 def test_initialize_creates_config_and_operational_layout(tmp_path: Path) -> None:
@@ -24,6 +26,45 @@ def test_initialize_creates_config_and_operational_layout(tmp_path: Path) -> Non
     assert settings.fragments_dir.is_dir()
     assert config.stat().st_mode & 0o777 == 0o600
     assert managed.stat().st_mode & 0o777 == 0o700
+
+
+def test_create_profile_uses_private_directories(tmp_path: Path) -> None:
+    settings = initialize_settings(tmp_path / "config.yaml", tmp_path / "managed")
+
+    directory = create_profile(settings, "tyrion")
+
+    assert directory.stat().st_mode & 0o777 == 0o700
+    assert (directory / "state").stat().st_mode & 0o777 == 0o700
+
+
+def test_write_private_ignores_predictable_temporary_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "secret.env"
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("unchanged")
+    (tmp_path / "secret.env.tmp").symlink_to(sentinel)
+
+    write_private(target, "TOKEN=new\n")
+
+    assert sentinel.read_text() == "unchanged"
+    assert target.read_text() == "TOKEN=new\n"
+
+
+def test_load_settings_rejects_relative_local_paths(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text("managed_dir: relative\n")
+
+    with pytest.raises(ValueError, match="managed_dir must be an absolute path"):
+        load_settings(str(config))
+
+
+def test_load_settings_requires_boolean_animations(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f"managed_dir: {tmp_path / 'managed'}\nui:\n  animations: 'false'\n"
+    )
+
+    with pytest.raises(ValueError, match="ui.animations must be a boolean"):
+        load_settings(str(config))
 
 
 def test_initialize_accepts_custom_profiles_and_fragments(tmp_path: Path) -> None:

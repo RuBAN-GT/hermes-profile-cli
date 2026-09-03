@@ -1,5 +1,6 @@
 import os
 import re
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -116,11 +117,13 @@ def load_settings(value: str | None) -> Settings:
     if not isinstance(data, dict) or not isinstance(data.get("managed_dir"), str):
         raise ValueError("manager config requires a string managed_dir")
 
-    managed_dir = Path(data["managed_dir"]).expanduser()
-    profiles_dir = Path(data.get("profiles_dir", managed_dir / "profiles")).expanduser()
-    fragments_dir = Path(
-        data.get("fragments_dir", managed_dir / "fragments")
-    ).expanduser()
+    managed_dir = _absolute_dir(Path(data["managed_dir"]), "managed_dir")
+    profiles_dir = _absolute_dir(
+        Path(data.get("profiles_dir", managed_dir / "profiles")), "profiles_dir"
+    )
+    fragments_dir = _absolute_dir(
+        Path(data.get("fragments_dir", managed_dir / "fragments")), "fragments_dir"
+    )
     ui = data.get("ui", {})
     if not isinstance(ui, dict):
         raise ValueError("ui must be a mapping")
@@ -129,11 +132,14 @@ def load_settings(value: str | None) -> Settings:
         raise ValueError(f"ui.theme must be one of: {', '.join(sorted(THEME_NAMES))}")
     hosts = _load_hosts(data.get("hosts", {}))
     local_locations = _load_local_locations(data.get("local_locations", {}))
+    animations = ui.get("animations", True)
+    if not isinstance(animations, bool):
+        raise ValueError("ui.animations must be a boolean")
     return Settings(
         managed_dir=managed_dir,
         profiles_dir=profiles_dir,
         fragments_dir=fragments_dir,
-        animations=bool(ui.get("animations", True)),
+        animations=animations,
         theme=theme,
         hosts=hosts,
         local_locations=local_locations,
@@ -326,7 +332,15 @@ def _absolute_dir(path: Path, name: str) -> Path:
 
 def write_private(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(content)
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w") as file:
+            file.write(content)
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise

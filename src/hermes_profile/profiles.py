@@ -37,8 +37,11 @@ def create_profile(settings: Settings, name: str) -> Path:
     directory = profile_dir(settings, name)
     if directory.exists():
         raise ValueError(f"profile already exists: {name}")
-    directory.mkdir(parents=True)
-    (directory / "state").mkdir()
+    directory.mkdir(parents=True, mode=0o700)
+    directory.chmod(0o700)
+    state = directory / "state"
+    state.mkdir(mode=0o700)
+    state.chmod(0o700)
     write_private(directory / "profile.yaml", "config: []\nenv: []\n")
     return directory
 

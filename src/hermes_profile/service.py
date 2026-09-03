@@ -13,19 +13,21 @@ from hermes_profile.profiles import config_documents, env_documents, load_profil
 
 
 def render_profile(
-    settings: Settings, name: str
+    settings: Settings, name: str, *, include_runtime: bool = True
 ) -> tuple[dict[str, Any], dict[str, str]]:
     profile = load_profile(settings, name)
     directory = settings.profiles_dir / profile.name
     config: dict[str, Any] = {}
     for document in config_documents(settings, profile):
         config = merge(config, document)
-    config = merge(config, _read_yaml(directory / "runtime-config.yaml"))
+    if include_runtime:
+        config = merge(config, _read_yaml(directory / "runtime-config.yaml"))
 
     environment: dict[str, str] = {}
     for source, document in env_documents(settings, profile):
         environment.update(parse_env(document, source))
-    environment.update(_read_env(directory / "runtime.env"))
+    if include_runtime:
+        environment.update(_read_env(directory / "runtime.env"))
     return config, environment
 
 
@@ -83,12 +85,17 @@ def apply(settings: Settings, name: str, discard_runtime: bool = False) -> None:
         raise ValueError(
             "profile has runtime drift; run reconcile or pass --discard-runtime"
         )
-    config, environment = render_profile(settings, name)
+    config, environment = render_profile(
+        settings, name, include_runtime=not discard_runtime
+    )
     directory = settings.profiles_dir / name
     _write_yaml(directory / "config.yaml", config)
     write_private(directory / ".env", render_env(environment))
     _write_yaml(directory / "state" / "applied-config.yaml", config)
     write_private(directory / "state" / "applied.env", render_env(environment))
+    if discard_runtime:
+        (directory / "runtime-config.yaml").unlink(missing_ok=True)
+        (directory / "runtime.env").unlink(missing_ok=True)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -120,7 +127,7 @@ def _auth_inventory_changed(directory: Path) -> bool:
     current = _auth_inventory_digest(directory / "auth.json")
     applied = directory / "state" / "auth-inventory.sha256"
     if current is None:
-        return False
+        return applied.is_file()
     return not applied.is_file() or applied.read_text().strip() != current
 
 
@@ -128,6 +135,8 @@ def _write_auth_inventory(directory: Path) -> None:
     digest = _auth_inventory_digest(directory / "auth.json")
     if digest is not None:
         write_private(directory / "state" / "auth-inventory.sha256", f"{digest}\n")
+    else:
+        (directory / "state" / "auth-inventory.sha256").unlink(missing_ok=True)
 
 
 def _auth_inventory_digest(path: Path) -> str | None:

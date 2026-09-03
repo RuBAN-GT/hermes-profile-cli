@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from hermes_profile.models import Host, Settings
+from hermes_profile.paths import PROFILE_NAME
 from hermes_profile.profiles import create_profile, list_profiles
 from hermes_profile.service import apply, reconcile, render_profile, status
 
@@ -228,6 +229,7 @@ echo BINARY:"$venv/bin/hermes-profile"
         )
 
     def _file_status(self, name: str) -> dict[str, bool]:
+        _validate_profile_name(name)
         directory = shlex.quote(str(self.host.profiles_dir / name))
         script = f"""
 d={directory}
@@ -260,6 +262,7 @@ fi
         }
 
     def _file_preview(self, name: str) -> dict[str, Any]:
+        _validate_profile_name(name)
         directory = shlex.quote(str(self.host.profiles_dir / name))
         script = f"""
 d={directory}
@@ -377,6 +380,11 @@ def normalize_remote_binary(value: str) -> str:
 
 def is_hermes_agent_binary(binary: str) -> bool:
     return Path(binary).name == "hermes"
+
+
+def _validate_profile_name(name: str) -> None:
+    if not PROFILE_NAME.fullmatch(name):
+        raise ValueError("profile name must use lowercase letters, digits, and hyphens")
 
 
 def ssh_error_message(alias: str, binary: str, detail: str) -> str:

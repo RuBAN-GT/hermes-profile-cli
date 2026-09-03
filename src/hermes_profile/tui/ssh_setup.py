@@ -1,10 +1,12 @@
 from dataclasses import replace
 from pathlib import Path
 
+from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label
+from textual.widgets import Button, Input, Label, LoadingIndicator
+from textual.worker import Worker, WorkerState
 
 from hermes_profile.models import Host
 from hermes_profile.paths import upsert_host
@@ -32,6 +34,7 @@ class SshSetupScreen(ModalScreen[bool]):
     #ssh-subtitle, .hint { color: $secondary; margin-bottom: 1; }
     #ssh-fields { height: 1fr; }
     #ssh-error { color: $error; height: 2; }
+    #ssh-loading { height: 1; margin: 1 0; }
     Input { margin: 1 0; border: round $secondary; }
     Input:focus { border: round $accent; }
     #ssh-actions { height: auto; margin-top: 1; }
@@ -130,6 +133,7 @@ class SshSetupScreen(ModalScreen[bool]):
                     placeholder="/opt/hermes/managed/config.yaml",
                     id="remote-config",
                 )
+                yield LoadingIndicator(id="ssh-loading")
                 yield Label("", id="ssh-error")
             with Horizontal(id="ssh-actions"):
                 yield Button("Save host", id="save-ssh")
@@ -137,22 +141,53 @@ class SshSetupScreen(ModalScreen[bool]):
                 yield Button("Clone + install", id="install-ssh")
                 yield Button("Cancel", id="cancel-ssh")
 
+    def on_mount(self) -> None:
+        self.query_one("#ssh-loading", LoadingIndicator).display = False
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel-ssh":
             self.dismiss(False)
             return
         try:
             host = self._host()
-            upsert_host(self.config, host)
-            if event.button.id == "init-ssh":
-                SshTransport(host).init()
-            elif event.button.id == "install-ssh":
-                result = SshTransport(host).install()
-                upsert_host(self.config, replace(host, remote_binary=result["binary"]))
         except ValueError as error:
             self.query_one("#ssh-error", Label).update(str(error))
             return
-        self.dismiss(True)
+        if event.button.id == "save-ssh":
+            upsert_host(self.config, host)
+            self.dismiss(True)
+            return
+        if event.button.id not in {"init-ssh", "install-ssh"}:
+            return
+        install = event.button.id == "install-ssh"
+        action = "Cloning and installing" if install else "Initializing remote"
+        self.query_one("#ssh-loading", LoadingIndicator).display = True
+        self.query_one("#ssh-error", Label).update(f"{action} over SSH...")
+        for button in self.query(Button):
+            button.disabled = True
+        self.run_ssh_action(host, install)
+
+    @work(thread=True, exclusive=True, group="ssh-action", exit_on_error=False)
+    def run_ssh_action(self, host: Host, install: bool) -> None:
+        upsert_host(self.config, host)
+        transport = SshTransport(host)
+        if install:
+            result = transport.install()
+            upsert_host(self.config, replace(host, remote_binary=result["binary"]))
+            return
+        transport.init()
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.group != "ssh-action":
+            return
+        if event.state == WorkerState.ERROR:
+            self.query_one("#ssh-loading", LoadingIndicator).display = False
+            for button in self.query(Button):
+                button.disabled = False
+            self.query_one("#ssh-error", Label).update(str(event.worker.error))
+            return
+        if event.state == WorkerState.SUCCESS:
+            self.dismiss(True)
 
     def _target_value(self) -> str:
         if self.host is None:

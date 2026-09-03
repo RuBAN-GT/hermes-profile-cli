@@ -70,6 +70,38 @@ def test_reconcile_preserves_runtime_changes(tmp_path: Path) -> None:
     assert environment == {"ONE": "runtime", "TWO": "two"}
 
 
+def test_apply_discard_runtime_removes_runtime_overlays(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _profile(settings)
+    apply(settings, "tyrion")
+    directory = settings.profiles_dir / "tyrion"
+    (directory / "runtime-config.yaml").write_text("model:\n  name: runtime\n")
+    (directory / "runtime.env").write_text("ONE=runtime\nTWO=two\n")
+    (directory / "config.yaml").write_text("model:\n  name: changed\n")
+
+    apply(settings, "tyrion", discard_runtime=True)
+
+    assert render_profile(settings, "tyrion") == (
+        {"model": {"name": "base"}},
+        {"ONE": "one"},
+    )
+    assert not (directory / "runtime-config.yaml").exists()
+    assert not (directory / "runtime.env").exists()
+
+
+def test_reconcile_reports_removed_auth_inventory(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _profile(settings)
+    auth = settings.profiles_dir / "tyrion" / "auth.json"
+    auth.write_text('{"credential_pool": {}}')
+    reconcile(settings, "tyrion")
+    auth.unlink()
+
+    assert status(settings, "tyrion")["auth_inventory_changed"] is True
+    reconcile(settings, "tyrion")
+    assert status(settings, "tyrion")["auth_inventory_changed"] is False
+
+
 def test_reconcile_acknowledges_auth_inventory_without_copying_auth(
     tmp_path: Path,
 ) -> None:

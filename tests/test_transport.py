@@ -233,6 +233,16 @@ def test_ssh_preview_reads_remote_config_without_cli(
     }
 
 
+@pytest.mark.parametrize("name", ("../outside", "../../tmp", "Tyrion"))
+def test_ssh_file_fallback_rejects_invalid_profile_names(name: str) -> None:
+    transport = SshTransport(_host())
+
+    with pytest.raises(ValueError, match="profile name"):
+        transport._file_status(name)
+    with pytest.raises(ValueError, match="profile name"):
+        transport._file_preview(name)
+
+
 def test_ssh_install_clones_repo_and_reports_binary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
