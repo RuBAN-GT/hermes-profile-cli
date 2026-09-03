@@ -37,10 +37,9 @@ Locations
 - local: primary workspace. Other aliases are extra local folders or SSH hosts.
 
 Fragment layout
-- config/common.yaml plus gateway/stt/safety/updates: host defaults
-- config/capabilities/*: optional mixins (browser, image-gen, mcp-*, dashboard, web)
-- config/roles/<source>.yaml: shareable policy (toolsets, plugins, limits)
-- config/profiles/<name>.yaml: identity only (pet, memory db path, docker volumes)
+- config/common.yaml, config/host.yaml: shared defaults
+- config/capabilities/*: optional mixins (browser, image-gen, mcp-tududi)
+- config/profiles/<name>.yaml: policy plus identity (pet, db path, volumes)
 - env/common.env, env/terminal.env: shared non-secrets
 - env/profiles/<name>.private.env: tokens and per-profile paths
 

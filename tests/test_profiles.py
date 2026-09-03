@@ -22,14 +22,15 @@ def test_create_profile_can_seed_fragment_refs(tmp_path: Path) -> None:
     assert profile.env_fragments == ("env/common.env",)
 
 
-def test_share_profile_stack_keeps_roles_and_blanks_secrets(tmp_path: Path) -> None:
+def test_share_profile_stack_retargets_identity_and_blanks_secrets(
+    tmp_path: Path,
+) -> None:
     settings = _settings(tmp_path)
     create_profile(
         settings,
         "gogol",
         config_fragments=(
             "config/common.yaml",
-            "config/roles/gogol.yaml",
             "config/profiles/gogol.yaml",
         ),
         env_fragments=("env/terminal.env", "env/profiles/gogol.private.env"),
@@ -55,7 +56,6 @@ def test_share_profile_stack_keeps_roles_and_blanks_secrets(tmp_path: Path) -> N
     ned = load_profile(settings, "ned")
     assert ned.config_fragments == (
         "config/common.yaml",
-        "config/roles/gogol.yaml",
         "config/profiles/ned.yaml",
     )
     assert ned.env_fragments == (
@@ -92,7 +92,7 @@ def test_update_set_config_replaces_fragment_list(
             "--set-config",
             "config/common.yaml",
             "--set-config",
-            "config/roles/tyrion.yaml",
+            "config/profiles/tyrion.yaml",
             "--add-env",
             "env/common.env",
         ]
@@ -100,6 +100,6 @@ def test_update_set_config_replaces_fragment_list(
     profile = load_profile(settings, "tyrion")
     assert profile.config_fragments == (
         "config/common.yaml",
-        "config/roles/tyrion.yaml",
+        "config/profiles/tyrion.yaml",
     )
     assert profile.env_fragments == ("env/old.env", "env/common.env")

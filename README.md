@@ -122,12 +122,8 @@ flowchart TD
 ```yaml
 config:
   - config/common.yaml
-  - config/gateway.yaml
-  - config/stt.yaml
-  - config/safety.yaml
-  - config/updates.yaml
+  - config/host.yaml
   - config/capabilities/browser.yaml
-  - config/roles/gogol.yaml
   - config/profiles/ned.yaml
 env:
   - env/common.env
@@ -136,10 +132,10 @@ env:
 auth: ned
 ```
 
-`config/common.yaml` and capability fragments are shared. `config/roles/<source>.yaml`
-is the shareable policy of an existing profile. `config/profiles/<name>.yaml` is
-identity only: pet name, memory db path, docker volumes. Lists replace on merge,
-so toolsets and plugin enable/disable lists stay in the role fragment.
+`config/common.yaml` and `config/host.yaml` are shared. Capability fragments are
+optional mixins. `config/profiles/<name>.yaml` is the profile itself: policy plus
+identity (pet, memory db path, docker volumes). `create --share-from` copies
+shared refs and retargets that profile file without copying secrets.
 
 ```bash
 hermes-profile create ned --share-from gogol
