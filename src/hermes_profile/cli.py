@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from hermes_profile import __version__
+from hermes_profile.backups import create_backup, list_backups, restore_backup
 from hermes_profile.helptext import HELP_TEXT
 from hermes_profile.models import Profile, Settings
 from hermes_profile.paths import (
@@ -24,7 +25,15 @@ from hermes_profile.profiles import (
     load_profile,
 )
 from hermes_profile.self_update import self_update
-from hermes_profile.service import apply, reconcile, render_profile, status
+from hermes_profile.service import (
+    apply,
+    preflight,
+    reconcile,
+    render_profile,
+    shared_auth_status,
+    status,
+    sync_shared_auth,
+)
 from hermes_profile.transport import SshTransport, remote_arguments
 
 
@@ -111,6 +120,8 @@ def _parser() -> argparse.ArgumentParser:
     render = commands.add_parser("render")
     render.add_argument("name")
     render.add_argument("--check", action="store_true")
+    preflight_parser = commands.add_parser("preflight")
+    preflight_parser.add_argument("name")
     reconcile_parser = commands.add_parser("reconcile")
     reconcile_parser.add_argument("name")
     apply_parser = commands.add_parser("apply")
@@ -125,10 +136,26 @@ def _parser() -> argparse.ArgumentParser:
     delete.add_argument("--confirm", action="store_true")
     auth = commands.add_parser("auth")
     auth_subcommands = auth.add_subparsers(dest="auth_command", required=True)
-    pull = auth_subcommands.add_parser("pull")
-    pull.add_argument("target")
-    pull.add_argument("--from", dest="source", required=True)
-    pull.add_argument("--provider", action="append", default=["all"])
+    auth_subcommands.add_parser(
+        "shared-status", help="inspect the Hermes root auth fallback"
+    )
+    sync_auth = auth_subcommands.add_parser(
+        "sync", help="copy selected provider records to the root auth fallback"
+    )
+    sync_auth.add_argument("--from", dest="source", required=True)
+    sync_auth.add_argument("--provider", action="append", required=True)
+    sync_auth.add_argument(
+        "--allow-oauth",
+        action="store_true",
+        help="allow copying OAuth refresh tokens into the shared fallback",
+    )
+    backup = commands.add_parser("backup", help="snapshot or restore managed setup")
+    backup_subcommands = backup.add_subparsers(dest="backup_command", required=True)
+    backup_subcommands.add_parser("create")
+    backup_subcommands.add_parser("list")
+    restore = backup_subcommands.add_parser("restore")
+    restore.add_argument("name")
+    restore.add_argument("--confirm", action="store_true")
     ssh = commands.add_parser("ssh")
     ssh_subcommands = ssh.add_subparsers(dest="ssh_command", required=True)
     for name in ("doctor", "init", "install"):
@@ -184,6 +211,8 @@ def _run_local(arguments: argparse.Namespace, settings: Settings) -> dict[str, A
     if arguments.command == "render":
         config, environment = render_profile(settings, arguments.name)
         return {"config": config, "environment_count": len(environment), "valid": True}
+    if arguments.command == "preflight":
+        return preflight(settings, arguments.name)
     if arguments.command == "reconcile":
         return {"reconciled": reconcile(settings, arguments.name), "ok": True}
     if arguments.command == "apply":
@@ -198,10 +227,24 @@ def _run_local(arguments: argparse.Namespace, settings: Settings) -> dict[str, A
         delete_profile(settings, arguments.name)
         return {"ok": True, "deleted": arguments.name}
     if arguments.command == "auth":
-        raise ValueError(
-            "auth pull is not implemented: it requires Hermes auth-store locking "
-            "and validation"
-        )
+        if arguments.auth_command == "shared-status":
+            return shared_auth_status(settings)
+        if arguments.auth_command == "sync":
+            return sync_shared_auth(
+                settings,
+                arguments.source,
+                arguments.provider,
+                allow_oauth=arguments.allow_oauth,
+            )
+        raise ValueError(f"unsupported auth command: {arguments.auth_command}")
+    if arguments.command == "backup":
+        if arguments.backup_command == "create":
+            return create_backup(settings)
+        if arguments.backup_command == "list":
+            return list_backups(settings)
+        if not arguments.confirm:
+            raise ValueError("backup restore requires --confirm")
+        return restore_backup(settings, arguments.name)
     raise ValueError(f"unsupported command: {arguments.command}")
 
 
@@ -227,6 +270,26 @@ def _emit(result: dict[str, Any], output: str) -> None:
         print(
             f"environment: {result['environment_count']} variable(s), values redacted"
         )
+    elif "config_diff" in result:
+        diff = result["config_diff"] or "No effective config changes.\n"
+        if not str(diff).endswith("\n"):
+            diff = f"{diff}\n"
+        print(diff, end="")
+        materialization = result.get("materialization_diff", "")
+        if materialization:
+            print("File materialization diff:")
+            if not str(materialization).endswith("\n"):
+                materialization = f"{materialization}\n"
+            print(materialization, end="")
+        if result.get("legacy_managed_layer"):
+            print("legacy managed layer: present")
+        for key, label in (
+            ("env_added", "added"),
+            ("env_changed", "changed"),
+            ("env_removed", "removed"),
+        ):
+            names = result[key]
+            print(f"env {label}: {', '.join(names) if names else 'none'}")
     else:
         print(yaml.safe_dump(result, allow_unicode=False, sort_keys=False), end="")
 

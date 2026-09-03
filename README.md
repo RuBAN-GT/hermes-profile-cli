@@ -16,6 +16,8 @@ environment fragments. Profile selection and file generation happen **before**
 - [How It Works](#how-it-works)
 - [Daily Operations](#daily-operations)
 - [Merging, Drift, And Secrets](#merging-drift-and-secrets)
+- [Shared Auth](#shared-auth)
+- [Setup Backups](#setup-backups)
 - [Remote Hosts](#remote-hosts)
 - [Updates And Help](#updates-and-help)
 
@@ -132,7 +134,7 @@ After creation and application, a profile looks like this:
   .env
   runtime-config.yaml
   runtime.env
-  auth.json                     # Hermes-owned; the manager never writes it
+  auth.json                     # Hermes-owned; never written for a profile
   state/
     applied-config.yaml
     applied.env
@@ -150,9 +152,15 @@ start with a letter or digit, and have a maximum length of 63 characters.
 | `create NAME` | create an empty profile and its `state/` directory |
 | `show NAME` | inspect fragment references |
 | `render NAME` | view the resulting YAML; environment values stay hidden |
+| `preflight NAME` | show effective vs file diffs before apply |
 | `status NAME` | check file drift and authentication inventory |
 | `apply NAME` | render fragments into `config.yaml` and `.env` |
 | `reconcile NAME` | preserve Hermes changes in the runtime overlay |
+| `auth shared-status` | inspect the Hermes root auth fallback |
+| `auth sync --from NAME --provider ID` | copy selected providers into shared auth |
+| `backup create` | snapshot fragments and profile declarations |
+| `backup list` | list setup backups |
+| `backup restore NAME --confirm` | restore setup files from a snapshot |
 | `delete NAME --confirm` | delete a profile |
 
 A typical workflow:
@@ -161,6 +169,7 @@ A typical workflow:
 hermes-profile create tyrion
 hermes-profile update tyrion --add-config config/base.yaml --add-env env/common.env
 hermes-profile render tyrion
+hermes-profile preflight tyrion
 hermes-profile apply tyrion
 hermes-profile status tyrion
 ```
@@ -202,11 +211,60 @@ hermes-profile apply tyrion --discard-runtime
 
 `reconcile` does not support deleting keys yet.
 
-Hermes owns `auth.json`. The manager never copies, displays, or edits it.
-`status` tracks only an inventory digest: provider, credential ID,
+`apply` writes `config.yaml` with top-level keys sorted. Nested maps keep the
+order produced by fragment merges.
+
+`preflight` is a dry run. It prints two diffs and never writes files:
+
+- **effective diff**: behaviour after merging a leftover Hermes
+  `managed/config.yaml` onto the current profile `config.yaml`
+- **file materialization diff**: the lines `apply` would write into
+  `config.yaml`
+
+Environment changes are listed by variable name only. In the TUI, `f` or
+**Preflight** shows the same view.
+
+## Shared Auth
+
+Hermes owns profile `auth.json` files. The manager never displays or edits
+them. `status` tracks only an inventory digest: provider, credential ID,
 authentication type, and source. Token refreshes do not cause drift; adding,
 removing, or changing a credential does. `reconcile` only acknowledges the
 current inventory.
+
+For the canonical `<root>/profiles/<name>` layout, Hermes profiles also use
+`<root>/auth.json` as a read-only fallback when that provider is absent from
+their local store. Use `hermes-profile auth shared-status` to verify this
+shared store without exposing credentials. Authenticate at the root with
+`HERMES_HOME=<root> hermes auth`; do not copy OAuth stores between profiles.
+
+To seed the shared fallback from one profile without changing that profile,
+copy only explicitly selected providers. In the TUI, select the source profile
+and press `u` or **Auth**:
+
+```bash
+hermes-profile auth sync --from tyrion --provider openai-codex --allow-oauth
+```
+
+The target is `<profiles_dir>/../auth.json`. Existing profiles retain local
+provider records and therefore continue to shadow the shared fallback.
+OAuth providers require `--allow-oauth`: after a sync, remove the source
+profile's local override during its planned migration so only the shared store
+can refresh that credential.
+
+## Setup Backups
+
+`backup create` archives manager-owned setup data in
+`<managed_dir>/backups`: shared fragments, `profile.yaml`, and runtime overlays.
+It deliberately excludes Hermes runtime databases, sessions, generated
+`config.yaml`/`.env`, and all auth stores. Restore requires explicit confirmation
+and only overwrites files that are present in the snapshot.
+
+```bash
+hermes-profile backup create
+hermes-profile backup list
+hermes-profile backup restore setup-20260903T120000Z.tar.gz --confirm
+```
 
 Private environment files and snapshots are written with mode `0600`; profile
 and `state/` directories use mode `0700`.
@@ -241,7 +299,8 @@ to `hermes`: it is the agent, not the profile manager.
 | Action | Without the remote CLI | With `hermes-profile` on the host |
 | --- | --- | --- |
 | `list`, `status`, Preview | SSH file reads | CLI JSON |
-| `create`, `apply`, `reconcile` | no | yes |
+| `preflight`, `create`, `apply`, `reconcile` | no | yes |
+| `auth`, `backup` | no | yes |
 | `ssh doctor` | no | yes |
 
 Without the remote CLI, Preview shows existing `config.yaml` and the number of

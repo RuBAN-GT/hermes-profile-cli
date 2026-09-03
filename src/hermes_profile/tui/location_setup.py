@@ -3,7 +3,7 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label
+from textual.widgets import Button, Checkbox, Input, Label
 
 from hermes_profile.models import LocalLocation
 from hermes_profile.paths import (
@@ -348,3 +348,58 @@ class CreateProfileScreen(ModalScreen[str | None]):
             )
             return
         self.dismiss(name)
+
+
+class AuthSyncScreen(ModalScreen[tuple[list[str], bool] | None]):
+    CSS = """
+    AuthSyncScreen { align: center middle; background: $background 70%; }
+    #auth-sync {
+        width: 70; height: auto; padding: 1 2; border: round $primary;
+        background: $surface;
+    }
+    #auth-sync-title { text-style: bold; color: $primary; }
+    #auth-sync-hint { color: $secondary; margin-bottom: 1; }
+    #auth-sync-error { color: $error; height: 2; }
+    Input { margin: 1 0; border: round $secondary; }
+    Button { margin-right: 1; border: round $secondary; text-style: bold; }
+    #start-auth-sync { border: round $success; color: $success; }
+    """
+
+    def __init__(self, source: str) -> None:
+        super().__init__()
+        self.source = source
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="auth-sync"):
+            yield Label(f"Seed shared auth from {self.source}", id="auth-sync-title")
+            yield Label(
+                "Comma-separated Hermes provider IDs. "
+                "The selected profile is read only.",
+                id="auth-sync-hint",
+            )
+            yield Input(placeholder="openai-codex, xai-oauth", id="auth-providers")
+            yield Checkbox(
+                "I understand this copies OAuth refresh tokens", id="allow-oauth"
+            )
+            yield Label("", id="auth-sync-error")
+            with Horizontal():
+                yield Button("Sync selected providers", id="start-auth-sync")
+                yield Button("Cancel", id="cancel-auth-sync")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-auth-sync":
+            self.dismiss(None)
+            return
+        providers = [
+            value.strip()
+            for value in self.query_one("#auth-providers", Input).value.split(",")
+            if value.strip()
+        ]
+        if not providers:
+            self.query_one("#auth-sync-error", Label).update(
+                "Enter at least one provider ID."
+            )
+            return
+        self.dismiss(
+            (providers, self.query_one("#allow-oauth", Checkbox).value)
+        )

@@ -26,6 +26,7 @@ from hermes_profile.transport import SSH_TIMEOUT_SECONDS, LocalTransport, SshTra
 from hermes_profile.tui.help import HelpScreen
 from hermes_profile.tui.location_home import LocationHomeScreen
 from hermes_profile.tui.location_setup import (
+    AuthSyncScreen,
     ConfirmScreen,
     CreateProfileScreen,
     DeleteLocationScreen,
@@ -42,10 +43,12 @@ STATUS_LABELS = {
 WORKSPACE_ACTIONS = {
     "refresh",
     "preview",
+    "preflight",
     "reconcile",
     "apply",
     "back",
     "create_profile",
+    "auth",
     "init_remote",
 }
 
@@ -97,6 +100,24 @@ def format_preview(name: str, config: object, env_count: object) -> str:
     return "\n".join(lines)
 
 
+def format_preflight(result: dict[str, Any]) -> str:
+    config_diff = result.get("config_diff") or "No effective config changes."
+    lines = ["[b]Preflight[/]", "", config_diff.rstrip(), ""]
+    materialization = result.get("materialization_diff", "")
+    if materialization:
+        lines.extend(["[b]File materialization diff[/]", materialization.rstrip(), ""])
+    if result.get("legacy_managed_layer"):
+        lines.append("legacy managed layer: present")
+    for key, label in (
+        ("env_added", "Environment added"),
+        ("env_changed", "Environment changed"),
+        ("env_removed", "Environment removed"),
+    ):
+        names = result.get(key, [])
+        lines.append(f"{label}: {', '.join(names) if names else 'none'}")
+    return "\n".join(lines)
+
+
 class ProfileTransport(Protocol):
     def profiles(self) -> list[str]: ...
 
@@ -105,6 +126,10 @@ class ProfileTransport(Protocol):
     def action(self, name: str, action: str) -> dict[str, Any]: ...
 
     def create(self, name: str) -> None: ...
+
+    def sync_auth(
+        self, source: str, providers: list[str], allow_oauth: bool
+    ) -> dict[str, Any]: ...
 
 
 class ProfileApp(App[None]):
@@ -179,6 +204,7 @@ class ProfileApp(App[None]):
         color: $background;
     }
     #preview { color: $primary; }
+    #preflight { color: $accent; }
     #reconcile { color: $warning; }
     #apply { color: $success; }
     #actions Button:disabled { color: $secondary; background: $surface; }
@@ -193,8 +219,10 @@ class ProfileApp(App[None]):
         Binding("r", "refresh", "Refresh"),
         Binding("n", "create_profile", "New"),
         Binding("p", "preview", "Preview"),
+        Binding("f", "preflight", "Preflight"),
         Binding("c", "reconcile", "Reconcile"),
-        Binding("a", "apply", "Apply"),
+         Binding("a", "apply", "Apply"),
+        Binding("u", "auth", "Auth"),
         Binding("i", "init_remote", "Init remote"),
         Binding("question_mark", "help", "Help", key_display="?"),
         Binding("f1", "help", "Help", show=False),
@@ -229,8 +257,10 @@ class ProfileApp(App[None]):
                     )
                     with Horizontal(id="actions"):
                         yield Button("Preview", id="preview", disabled=True)
+                        yield Button("Preflight", id="preflight", disabled=True)
                         yield Button("Reconcile", id="reconcile", disabled=True)
                         yield Button("Apply", id="apply", disabled=True)
+                        yield Button("Auth", id="auth", disabled=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -246,7 +276,7 @@ class ProfileApp(App[None]):
         if action == "init_remote" and not self.selected_host.startswith("ssh--"):
             return False
         if (
-            action in {"preview", "reconcile", "apply"}
+            action in {"preview", "preflight", "reconcile", "apply", "auth"}
             and self.selected_profile is None
         ):
             return None
@@ -263,6 +293,9 @@ class ProfileApp(App[None]):
     def action_preview(self) -> None:
         self._start_action("render")
 
+    def action_preflight(self) -> None:
+        self._start_action("preflight")
+
     def action_reconcile(self) -> None:
         self._start_action("reconcile")
 
@@ -278,6 +311,15 @@ class ProfileApp(App[None]):
                 "Apply",
             ),
             lambda confirmed: self._start_action("apply") if confirmed else None,
+        )
+
+    def action_auth(self) -> None:
+        if self.selected_profile is None:
+            self.notify("Select a source profile first.", severity="warning")
+            return
+        self.push_screen(
+            AuthSyncScreen(self.selected_profile),
+            self._auth_sync_requested,
         )
 
     def action_back(self) -> None:
@@ -299,10 +341,14 @@ class ProfileApp(App[None]):
             self.action_create_profile()
         elif event.button.id == "preview":
             self.action_preview()
+        elif event.button.id == "preflight":
+            self.action_preflight()
         elif event.button.id == "reconcile":
             self.action_reconcile()
         elif event.button.id == "apply":
             self.action_apply()
+        elif event.button.id == "auth":
+            self.action_auth()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id is None or event.list_view.id != "profiles":
@@ -325,11 +371,19 @@ class ProfileApp(App[None]):
     ) -> tuple[str, str, dict[str, Any]]:
         return name, action, self.transport.action(name, action)
 
+    @work(thread=True, exclusive=True, group="auth", exit_on_error=False)
+    def run_auth_sync(
+        self, source: str, providers: list[str], allow_oauth: bool
+    ) -> dict[str, Any]:
+        return self.transport.sync_auth(source, providers, allow_oauth)
+
     async def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.group == "profiles":
             await self._handle_profile_load(event)
         elif event.worker.group == "operation":
             self._handle_operation(event)
+        elif event.worker.group == "auth":
+            self._handle_auth_sync(event)
         elif event.worker.group == "remote-init":
             self._handle_remote_init(event)
 
@@ -421,9 +475,31 @@ class ProfileApp(App[None]):
             self.query_one("#summary", Label).update(f"{name} · preview")
             self.notify(f"Previewed {name}")
             return
+        if action == "preflight":
+            self.query_one("#profile-detail", Static).update(format_preflight(result))
+            self.query_one("#summary", Label).update(f"{name} · preflight")
+            self.notify(f"Preflighted {name}")
+            return
         self.notify(f"{name}: {action} completed")
         self.query_one("#summary", Label).update(f"{name}: {action} completed")
         self.action_refresh()
+
+    def _handle_auth_sync(self, event: Worker.StateChanged) -> None:
+        if event.state not in {WorkerState.ERROR, WorkerState.SUCCESS}:
+            return
+        self._set_busy(None)
+        if event.state == WorkerState.ERROR:
+            self.notify(str(event.worker.error), severity="error")
+            return
+        result = event.worker.result
+        providers = ", ".join(result["providers"])
+        self.query_one("#summary", Label).update(f"Shared auth synced: {providers}")
+        self.query_one("#profile-detail", Static).update(
+            f"[b]Shared auth updated[/]\n\nProviders: {providers}\n"
+            f"Store: {result['path']}\n\n"
+            "Existing profile-local provider records still take precedence."
+        )
+        self.notify("Shared auth synced")
 
     def _start_action(self, action: str) -> None:
         if self.selected_profile is None:
@@ -487,6 +563,35 @@ class ProfileApp(App[None]):
         self.selected_profile = name
         self.notify(f"Created {name}")
         self.action_refresh()
+
+    def _auth_sync_requested(self, request: tuple[list[str], bool] | None) -> None:
+        if request is None or self.selected_profile is None:
+            return
+        providers, allow_oauth = request
+        if allow_oauth:
+            self.push_screen(
+                ConfirmScreen(
+                    "Sync OAuth credentials",
+                    "Copy selected OAuth providers to the shared fallback?\n"
+                    "Existing local providers will continue to shadow it.",
+                    "Sync",
+                    danger=True,
+                ),
+                lambda confirmed: self._start_auth_sync(providers, allow_oauth)
+                if confirmed
+                else None,
+            )
+            return
+        self._start_auth_sync(providers, allow_oauth)
+
+    def _start_auth_sync(self, providers: list[str], allow_oauth: bool) -> None:
+        if self.selected_profile is None:
+            return
+        self._set_busy(
+            f"{self.selected_profile}: syncing shared auth...",
+            "[b]Shared auth[/]\n\nSyncing selected provider records...",
+        )
+        self.run_auth_sync(self.selected_profile, providers, allow_oauth)
 
     def edit_location(self, identifier: str, callback: Any) -> None:
         if identifier == "local":

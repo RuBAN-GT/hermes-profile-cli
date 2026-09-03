@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/) and
 [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.3.0] - 2026-09-03
+
+### Added
+
+- `preflight` shows an effective config diff and a file materialization diff.
+- TUI Preflight (`f`) and Auth (`u`) actions.
+- Provider-selective `auth sync` into the Hermes root fallback store.
+- `auth shared-status` reports shared providers without exposing secrets.
+- `backup create|list|restore` for fragments and profile declarations.
+
+### Changed
+
+- `apply` sorts top-level YAML keys in generated `config.yaml`.
+- Help and README cover preflight, shared auth, and setup backups.
+
 ## [0.2.0] - 2026-09-03
 
 ### Added

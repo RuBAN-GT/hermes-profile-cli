@@ -358,7 +358,7 @@ def write_private(path: Path, content: str) -> None:
     )
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w") as file:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             file.write(content)
         temporary.chmod(0o600)
         temporary.replace(path)

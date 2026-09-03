@@ -31,6 +31,8 @@ TUI keys
   i               Create remote dirs/config if missing
   n               New profile
   p               Preview rendered config (env values redacted)
+  f               Preflight: effective and file diffs, env names only
+  u               Sync selected auth providers to the shared fallback
   c               Reconcile runtime edits back into the profile
   r               Refresh
   esc             Back to locations
@@ -45,8 +47,13 @@ CLI
   hermes-profile create NAME
   hermes-profile status NAME
   hermes-profile render NAME
+  hermes-profile preflight NAME
   hermes-profile reconcile NAME
   hermes-profile apply NAME
+  hermes-profile auth shared-status
+  hermes-profile auth sync --from PROFILE --provider PROVIDER
+  hermes-profile backup create|list
+  hermes-profile backup restore NAME --confirm
   hermes-profile ssh doctor|init|install HOST
   hermes-profile --host ALIAS list
   hermes-profile self-update

@@ -10,7 +10,14 @@ import yaml
 from hermes_profile.models import Host, Settings
 from hermes_profile.paths import PROFILE_NAME
 from hermes_profile.profiles import create_profile, list_profiles
-from hermes_profile.service import apply, reconcile, render_profile, status
+from hermes_profile.service import (
+    apply,
+    preflight,
+    reconcile,
+    render_profile,
+    status,
+    sync_shared_auth,
+)
 
 SSH_TIMEOUT_SECONDS = 30
 INSTALL_TIMEOUT_SECONDS = 180
@@ -31,6 +38,13 @@ class LocalTransport:
     def create(self, name: str) -> None:
         create_profile(self.settings, name)
 
+    def sync_auth(
+        self, source: str, providers: list[str], allow_oauth: bool
+    ) -> dict[str, Any]:
+        return sync_shared_auth(
+            self.settings, source, providers, allow_oauth=allow_oauth
+        )
+
     def action(self, name: str, action: str) -> dict[str, Any]:
         if action == "render":
             directory = self.settings.profiles_dir / name
@@ -40,6 +54,8 @@ class LocalTransport:
             return {"config": config, "environment_count": len(environment)}
         if action == "reconcile":
             return {"reconciled": reconcile(self.settings, name)}
+        if action == "preflight":
+            return preflight(self.settings, name)
         if action == "apply":
             apply(self.settings, name)
             return {"applied": name}
@@ -100,6 +116,20 @@ class SshTransport:
             f"{self.host.alias}: creating a profile needs hermes-profile "
             "on the remote host"
         )
+
+    def sync_auth(
+        self, source: str, providers: list[str], allow_oauth: bool
+    ) -> dict[str, Any]:
+        if not self._cli_available():
+            raise ValueError(
+                f"{self.host.alias}: auth sync needs hermes-profile on the remote host"
+            )
+        arguments = ["auth", "sync", "--from", source]
+        for provider in providers:
+            arguments.extend(["--provider", provider])
+        if allow_oauth:
+            arguments.append("--allow-oauth")
+        return self.run(arguments)
 
     def action(self, name: str, action: str) -> dict[str, Any]:
         if self._cli_available():
