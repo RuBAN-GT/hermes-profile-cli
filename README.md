@@ -1,33 +1,46 @@
 # Hermes Profile CLI
 
-Declarative TUI/CLI manager for isolated Hermes agent profiles over local paths
-and SSH.
+`hermes-profile` собирает изолированные домашние каталоги агента Hermes из
+общих YAML- и env-фрагментов. Выбор профиля и запись файлов происходят **до**
+запуска gateway. Инструмент работает локально и по SSH.
 
-`hermes-profile` materializes isolated Hermes profiles from shared YAML and
-environment fragments. It is deliberately separate from Hermes plugins: profile
-selection and file generation happen before a gateway process starts.
+- Это не бинарник агента `hermes`: для удалённого менеджера используйте
+  `hermes-profile`.
+- Инструмент не создаёт, не перезапускает и не удаляет сервисы `launchd`.
+  Контроллер может вызвать `hermes-profile apply <profile>` перед работой со
+  службой профиля.
 
-The tool does not create, restart, or delete `launchd` services. A privileged
-controller may invoke `hermes-profile apply <profile>` before operating a
-profile-specific service.
+## Содержание
 
-## Requirements
+- [Что это](#что-это)
+- [Требования и установка](#требования-и-установка)
+- [Первый запуск](#первый-запуск)
+- [Как устроено](#как-устроено)
+- [Повседневная работа](#повседневная-работа)
+- [Слияние, drift и секреты](#слияние-drift-и-секреты)
+- [Удалённые хосты](#удалённые-хосты)
+- [Обновление и справка](#обновление-и-справка)
 
-- Python 3.11 or newer (`python3 --version`)
-- `git` (clone and remote install)
-- `ssh` on the manager machine for remote hosts
+## Что это
 
-macOS often ships `python3` 3.9. If `python3 --version` is below 3.11:
+Профиль - это отдельная директория Hermes с `config.yaml`, `.env` и состоянием
+последнего применения. Общие фрагменты конфигурации остаются в одном месте, а
+`profile.yaml` лишь ссылается на них. Это удобно, когда несколько агентов
+делят базовую конфигурацию, но имеют разные модели, интеграции или секреты.
+
+Фрагменты и сами профили - операционные данные: этот репозиторий их не создаёт
+и не хранит.
+
+## Требования и установка
+
+Нужны Python 3.11+, `git` и, для удалённых хостов, системный `ssh`. На macOS,
+где `python3` старее 3.11, установите современный Python:
 
 ```bash
 brew install python@3.12
 ```
 
-Then use `python3.12` in the commands below.
-
-## Setup
-
-### Local install
+Установка для локальной работы:
 
 ```bash
 git clone https://github.com/RuBAN-GT/hermes-profile-cli.git
@@ -38,93 +51,62 @@ python3 -m venv .venv
 .venv/bin/hermes-profile --version
 ```
 
-The CLI is `.venv/bin/hermes-profile`. Put that directory on `PATH`, or symlink
-it:
+При желании сделайте команду доступной из `PATH`:
 
 ```bash
 mkdir -p ~/.local/bin
 ln -sf "$(pwd)/.venv/bin/hermes-profile" ~/.local/bin/hermes-profile
 ```
 
-This is **not** the Hermes agent (`hermes`). Do not point `remote_binary` at
-`hermes`.
+## Первый запуск
 
-### First run
+Основной путь - интерактивная настройка:
 
 ```bash
 hermes-profile tui
 ```
 
-It first asks **this computer** or **SSH**, then lets you set manager config,
-managed, profiles, and fragments paths. Press `?` or `F1` for help. For
-non-interactive setup:
+Сначала выберите этот компьютер или SSH-хост. Затем укажите пути менеджера,
+профилей и фрагментов. В TUI `?` или `F1` открывают краткую справку; выбранная
+тема сохраняется в конфигурации менеджера.
+
+Для сценариев без TUI используйте `init`:
 
 ```bash
-hermes-profile init --managed-dir /absolute/path/to/hermes-managed
+hermes-profile init --managed-dir /srv/hermes/managed
 hermes-profile init --managed-dir /srv/hermes/managed \
   --profiles-dir /srv/hermes/homes \
   --fragments-dir /srv/hermes/fragments
-hermes-profile help
 ```
 
-Copy `config.example.yaml` outside the repository if you want a hand-written
-config, then set `HERMES_PROFILE_CONFIG` or pass `--config /path/to/config.yaml`.
+По умолчанию конфигурация менеджера хранится в
+`~/.config/hermes-profile/config.yaml`, а `managed_dir` - в
+`~/.local/share/hermes-profile/managed`. Также можно скопировать
+`config.example.yaml` вне репозитория и передать его через `--config` или
+`HERMES_PROFILE_CONFIG`. Пути в примере - только примеры.
 
-### Remote host
+## Как устроено
 
-The remote machine also needs **git** and **Python 3.11+**. Install Python first
-if needed (`brew install python@3.12` on macOS). Non-interactive SSH must see
-that interpreter: Homebrew is checked at `/opt/homebrew/bin` and
-`/usr/local/bin`.
+Конфигурация менеджера перечисляет места работы: основное локальное, другие
+локальные папки и SSH-хосты. У каждого места есть три корня:
+`managed_dir`, `profiles_dir` и `fragments_dir`.
 
-From the manager:
-
-```bash
-hermes-profile ssh install gateway-a
+```mermaid
+flowchart TD
+  cfg["config.yaml менеджера"]
+  cfg --> local["основное local"]
+  cfg --> extra["другие local_locations"]
+  cfg --> ssh["hosts по SSH"]
+  local --> roots["managed_dir / profiles_dir / fragments_dir"]
+  extra --> roots
+  ssh --> roots
+  roots --> profiles["profiles_dir / name"]
+  roots --> fragments["fragments_dir"]
+  profiles --> profile["profile.yaml: только ссылки"]
+  fragments --> profile
 ```
 
-Or in the TUI: **Clone + install**. That creates remote dirs/config, clones this
-repository, and installs the CLI. **Init dirs** / `ssh init` only create
-dirs/config.
-
-Remote layout:
-
-```text
-~/.local/share/hermes-profile/src    # git clone
-~/.local/share/hermes-profile/venv   # venv
-~/.local/share/hermes-profile/venv/bin/hermes-profile
-```
-
-The first-run TUI can do the same after you choose SSH: **Create SSH setup,
-clone, and install CLI**. Use an SSH target such as
-`deploy@gateway.example -p 22`. The remote manager CLI field is
-`hermes-profile`, not the `hermes` agent.
-
-Update this CLI (git fetch of `main`, then reinstall into the current Python):
-
-```bash
-hermes-profile self-update
-```
-
-## Layout
-
-`managed_dir` is the tool's state root. `profiles_dir` and `fragments_dir`
-default to its `profiles/` and `fragments/` children, but may be configured
-independently for an existing installation.
-
-```text
-<profiles_dir>/<profile>/
-  profile.yaml
-  config.yaml
-  .env
-  runtime-config.yaml
-  runtime.env
-  state/
-    applied-config.yaml
-    applied.env
-```
-
-`profile.yaml` contains only fragment references relative to `fragments_dir`:
+`profile.yaml` хранит относительные ссылки внутри `fragments_dir`:
 
 ```yaml
 config:
@@ -135,94 +117,142 @@ env:
   - env/tyrion.private.env
 ```
 
-Fragments and actual profile state are local operational data and are not
-created or tracked by this project.
+После создания и применения профиль выглядит так:
 
-## Commands
-
-```bash
-hermes-profile list
-hermes-profile create tyrion
-hermes-profile show tyrion
-hermes-profile status tyrion
-hermes-profile render tyrion --check
-hermes-profile reconcile tyrion
-hermes-profile apply tyrion
-hermes-profile delete tyrion --confirm
-hermes-profile tui
-hermes-profile help
-hermes-profile self-update
+```text
+<profiles_dir>/<profile>/
+  profile.yaml
+  config.yaml
+  .env
+  runtime-config.yaml
+  runtime.env
+  auth.json                     # принадлежит Hermes, менеджер его не пишет
+  state/
+    applied-config.yaml
+    applied.env
+    auth-inventory.sha256
 ```
 
-`apply` refuses to overwrite `config.yaml` or `.env` when they differ from the
-last applied snapshot. This catches changes made by Hermes through `hermes
-config`, a dashboard, or a plugin. Run `reconcile` to preserve additive and
-changed values in the profile-local runtime overlay. Key deletion is not yet a
-supported merge operation.
+Имя профиля может содержать только строчные латинские буквы, цифры и дефисы,
+начинаясь с буквы или цифры; максимальная длина - 63 символа.
 
-## Merge and secrets
+## Повседневная работа
 
-YAML maps merge recursively; lists and scalar values are replaced by the later
-fragment. Environment fragments accept only comments, blank lines, and
-`NAME=value` assignments. They are never sourced or executed.
+| Команда | Когда использовать |
+| --- | --- |
+| `list` | посмотреть известные профили |
+| `create NAME` | создать пустой профиль и его `state/` |
+| `show NAME` | проверить ссылки на фрагменты |
+| `render NAME` | просмотреть итоговый YAML; значения env не выводятся |
+| `status NAME` | проверить изменения файлов и inventory авторизации |
+| `apply NAME` | собрать фрагменты и записать `config.yaml` и `.env` |
+| `reconcile NAME` | сохранить изменения Hermes в runtime overlay |
+| `delete NAME --confirm` | удалить профиль |
 
-The tool writes `.env`, `runtime.env`, and state environment snapshots as mode
-`0600`. It does not print environment values. Auth-pool transfer is intentionally
-not implemented yet: it must use Hermes' auth-store lock and validation APIs,
-rather than copy `auth.json` as a file.
-
-## Remote hosts
-
-Without `--host`, commands manage local files. Define a host in the manager
-configuration to send the same command to a remote installation through your
-system SSH client:
+Обычный рабочий цикл:
 
 ```bash
-hermes-profile ssh doctor gateway-a
+hermes-profile create tyrion
+hermes-profile update tyrion --add-config config/base.yaml --add-env env/common.env
+hermes-profile render tyrion
+hermes-profile apply tyrion
+hermes-profile status tyrion
+```
+
+Для скриптов добавьте глобальный `--format json`. Команда `update` только
+добавляет ссылки на фрагменты; сами фрагменты подготовьте заранее.
+
+## Слияние, drift и секреты
+
+YAML-карты сливаются рекурсивно. Списки и простые значения из более позднего
+фрагмента заменяют предыдущие. Env-фрагменты допускают только комментарии,
+пустые строки и `NAME=value`; они никогда не выполняются как shell-код.
+
+```mermaid
+flowchart LR
+  fragments["фрагменты + runtime overlay"] --> render["render"]
+  render --> apply["apply"]
+  apply --> files["config.yaml и .env"]
+  apply --> snapshot["state/applied-*"]
+  files --> hermes["Hermes или dashboard"]
+  hermes --> drift["status: drift"]
+  drift -->|"reconcile"| runtime["runtime-config.yaml / runtime.env"]
+  drift -->|"apply --discard-runtime"| apply
+  runtime --> render
+```
+
+`apply` не перезапишет `config.yaml` или `.env`, если они отличаются от
+последнего снимка. Это защищает изменения, сделанные через Hermes, dashboard
+или плагин. Выберите один из путей:
+
+```bash
+# Сохранить добавленные и изменённые runtime-значения в overlay.
+hermes-profile reconcile tyrion
+hermes-profile apply tyrion
+
+# Отбросить runtime overlay и собрать только объявленные фрагменты.
+hermes-profile apply tyrion --discard-runtime
+```
+
+Удаление ключей при `reconcile` пока не поддерживается.
+
+`auth.json` принадлежит Hermes. Менеджер не копирует, не показывает и не
+изменяет его. `status` отслеживает только хеш inventory: provider, ID
+учётной записи, тип авторизации и источник. Обновление токена не создаёт drift;
+добавление, удаление или смена учётной записи создаёт. `reconcile` лишь
+подтверждает текущее inventory.
+
+Приватные env-файлы и снимки записываются с правами `0600`; каталоги профиля и
+`state/` - с `0700`.
+
+## Удалённые хосты
+
+Сначала добавьте SSH-хост через `hermes-profile tui` или конфигурацию менеджера.
+Используйте существующий SSH agent и ключи: пароли не сохраняются. Для TUI
+доступны кнопки **Save host**, **Init dirs** и **Clone + install**.
+
+```bash
 hermes-profile ssh init gateway-a
 hermes-profile ssh install gateway-a
 hermes-profile --host gateway-a list
 hermes-profile --host gateway-a apply tyrion
 ```
 
-`ssh init` creates only configured profile/fragment directories and a
-secret-free remote manager config when it does not exist. It does not install
-this package, copy profiles, credentials, `.env` files, or create services.
-`ssh install` runs `ssh init`, then clones this repository on the remote host
-and installs `hermes-profile` into `~/.local/share/hermes-profile/venv`. The
-remote needs `git` and Python 3.11+. List, status, and Preview work over SSH
-files without that binary. Apply/Reconcile need it. It does not generate Hermes
-`bin/` (uv, tirith) inside a profile home.
+`ssh init` создаёт только каталоги и secret-free конфигурацию менеджера, если
+её ещё нет. Он не копирует профили, `.env`, credentials и не создаёт сервисы.
+`ssh install` сначала выполняет `init`, затем клонирует этот репозиторий и
+устанавливает CLI на удалённой машине:
 
-The TUI starts on a location picker: `local`, extra local folders, and every
-configured SSH host. Enter opens that workspace. Escape returns to locations.
-Remote calls run in background workers; they use JSON protocol rather than
-parse terminal output.
+```text
+~/.local/share/hermes-profile/src
+~/.local/share/hermes-profile/venv
+~/.local/share/hermes-profile/venv/bin/hermes-profile
+```
 
-Use **Add location** in the TUI to add either another local profile root or an
-SSH host. Saving a local location creates its `managed`, `profiles`, and
-`fragments` directories with mode `0700`. For SSH, **Save host** only records
-the connection; **Init dirs** also creates remote manager directories and its
-secret-free config; **Clone + install** clones this repo and installs the
-remote `hermes-profile` CLI.
+Удалённому хосту также нужны `git` и Python 3.11+. Не указывайте `hermes` как
+`remote_binary`: это агент, а не менеджер профилей.
 
-The TUI includes curated `hermes-dracula`, `hermes-nord`, and `hermes-gruvbox`
-themes in the Textual command palette. The selected curated theme is persisted
-as `ui.theme` in the manager config.
+| Действие | Без remote CLI | С `hermes-profile` на хосте |
+| --- | --- | --- |
+| `list`, `status`, Preview | чтение файлов по SSH | CLI JSON |
+| `create`, `apply`, `reconcile` | нет | да |
+| `ssh doctor` | нет | да |
 
-## Hermes-owned auth
+Preview без удалённого CLI показывает уже записанные `config.yaml` и число
+переменных `.env`; он не собирает фрагменты. Проверка auth inventory в таком
+режиме также ограничена наличием файлов.
 
-Hermes owns `auth.json`. The manager never merges, snapshots, or displays its
-credentials. `status` tracks a digest of credential inventory only (provider,
-credential ID, auth type, source), so new or removed credentials are visible
-without exposing secrets. Token refreshes and request counters do not trigger
-inventory drift. Run `reconcile` to acknowledge the current inventory; it never
-modifies `auth.json`. Auth inventory does not block config/env `apply`.
+## Обновление и справка
 
-## Quality checks
+Обновить установленный из git CLI:
 
 ```bash
-.venv/bin/pytest
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
+hermes-profile self-update
 ```
+
+Команда получает `main`, делает `reset --hard` и переустанавливает пакет в
+текущий Python. Не запускайте её из checkout с незакоммиченными изменениями.
+
+Полная справка доступна через `hermes-profile help`, а в TUI - через `?` или
+`F1`. Требования к вкладу и локальные проверки описаны в
+[CONTRIBUTING.md](CONTRIBUTING.md).
