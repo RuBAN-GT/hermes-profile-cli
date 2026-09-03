@@ -7,14 +7,17 @@ from typing import Any
 
 import yaml
 
+from hermes_profile.auth_map import auth_map_status, bind_profile_auth
+from hermes_profile.backups import create_backup, list_backups, restore_backup
 from hermes_profile.models import Host, Settings
 from hermes_profile.paths import PROFILE_NAME
-from hermes_profile.profiles import create_profile, list_profiles
+from hermes_profile.profiles import create_profile, delete_profile, list_profiles
 from hermes_profile.service import (
     apply,
     preflight,
     reconcile,
     render_profile,
+    shared_auth_status,
     status,
     sync_shared_auth,
 )
@@ -38,6 +41,27 @@ class LocalTransport:
     def create(self, name: str) -> None:
         create_profile(self.settings, name)
 
+    def delete(self, name: str) -> None:
+        delete_profile(self.settings, name)
+
+    def bind_auth(self, name: str, *, force: bool = False) -> dict[str, Any]:
+        return bind_profile_auth(self.settings, name, force=force)
+
+    def auth_map_status(self) -> dict[str, Any]:
+        return auth_map_status(self.settings)
+
+    def shared_status(self) -> dict[str, Any]:
+        return shared_auth_status(self.settings)
+
+    def backup(self, action: str, name: str | None = None) -> dict[str, Any]:
+        if action == "create":
+            return create_backup(self.settings)
+        if action == "list":
+            return list_backups(self.settings)
+        if name is None:
+            raise ValueError("backup restore requires a snapshot name")
+        return restore_backup(self.settings, name)
+
     def sync_auth(
         self, source: str, providers: list[str], allow_oauth: bool
     ) -> dict[str, Any]:
@@ -59,6 +83,9 @@ class LocalTransport:
         if action == "apply":
             apply(self.settings, name)
             return {"applied": name}
+        if action == "apply-discard":
+            apply(self.settings, name, discard_runtime=True)
+            return {"applied": name, "discarded_runtime": True}
         raise ValueError(f"unsupported profile action: {action}")
 
 
@@ -117,6 +144,53 @@ class SshTransport:
             "on the remote host"
         )
 
+    def delete(self, name: str) -> None:
+        if not self._cli_available():
+            raise ValueError(
+                f"{self.host.alias}: deleting a profile needs hermes-profile "
+                "on the remote host"
+            )
+        self.run(["delete", name, "--confirm"])
+
+    def bind_auth(self, name: str, *, force: bool = False) -> dict[str, Any]:
+        if not self._cli_available():
+            raise ValueError(
+                f"{self.host.alias}: auth bind needs hermes-profile on the remote host"
+            )
+        arguments = ["auth", "bind", name]
+        if force:
+            arguments.append("--force")
+        return self.run(arguments)
+
+    def auth_map_status(self) -> dict[str, Any]:
+        if not self._cli_available():
+            raise ValueError(
+                f"{self.host.alias}: auth map-status needs hermes-profile "
+                "on the remote host"
+            )
+        return self.run(["auth", "map-status"])
+
+    def shared_status(self) -> dict[str, Any]:
+        if not self._cli_available():
+            raise ValueError(
+                f"{self.host.alias}: auth shared-status needs hermes-profile "
+                "on the remote host"
+            )
+        return self.run(["auth", "shared-status"])
+
+    def backup(self, action: str, name: str | None = None) -> dict[str, Any]:
+        if not self._cli_available():
+            raise ValueError(
+                f"{self.host.alias}: backup needs hermes-profile on the remote host"
+            )
+        if action == "create":
+            return self.run(["backup", "create"])
+        if action == "list":
+            return self.run(["backup", "list"])
+        if name is None:
+            raise ValueError("backup restore requires a snapshot name")
+        return self.run(["backup", "restore", name, "--confirm"])
+
     def sync_auth(
         self, source: str, providers: list[str], allow_oauth: bool
     ) -> dict[str, Any]:
@@ -133,6 +207,8 @@ class SshTransport:
 
     def action(self, name: str, action: str) -> dict[str, Any]:
         if self._cli_available():
+            if action == "apply-discard":
+                return self.run(["apply", name, "--discard-runtime"])
             return self.run([action, name])
         if action == "render":
             return self._file_preview(name)
@@ -326,6 +402,36 @@ fi
             raw = output.split("__ENV_COUNT__", 1)[1].splitlines()[0].strip()
             env_count = int(raw or "0")
         return {"config": config, "environment_count": env_count}
+
+    def write_private_file(self, path: Path, content: str) -> None:
+        if not path.is_absolute() or ".." in path.parts:
+            raise ValueError("remote path must be absolute without '..'")
+        directory = shlex.quote(str(path.parent))
+        target = shlex.quote(str(path))
+        remote = (
+            "umask 077 && "
+            f"mkdir -p {directory} && chmod 700 {directory} && "
+            f"cat > {target} && chmod 600 {target}"
+        )
+        self._ssh_shell(remote, input_text=content)
+
+    def read_text_file(self, path: Path) -> str | None:
+        if not path.is_absolute() or ".." in path.parts:
+            raise ValueError("remote path must be absolute without '..'")
+        target = shlex.quote(str(path))
+        script = (
+            f"if [ ! -f {target} ]; then echo __ABSENT__; exit 0; fi; "
+            f"echo __PRESENT__; cat {target}"
+        )
+        output = self._ssh_shell(script).stdout
+        if output.startswith("__ABSENT__"):
+            return None
+        if output.startswith("__PRESENT__\n"):
+            return output.split("\n", 1)[1]
+        if output.startswith("__PRESENT__"):
+            return output[len("__PRESENT__") :].lstrip("\n")
+        raise ValueError(f"{self.host.alias}: unexpected remote file response")
+
     def _ssh(self, remote_arguments: list[str]) -> subprocess.CompletedProcess[str]:
         return self._ssh_shell(shlex.join(remote_arguments))
 

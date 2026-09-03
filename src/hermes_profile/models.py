@@ -9,6 +9,7 @@ class Settings:
     fragments_dir: Path
     animations: bool = True
     theme: str = "hermes-dracula"
+    language: str = "en"
     hosts: dict[str, "Host"] = field(default_factory=dict)
     local_locations: dict[str, "LocalLocation"] = field(default_factory=dict)
 
@@ -40,3 +41,4 @@ class Profile:
     name: str
     config_fragments: tuple[str, ...] = field(default_factory=tuple)
     env_fragments: tuple[str, ...] = field(default_factory=tuple)
+    auth: str | None = None

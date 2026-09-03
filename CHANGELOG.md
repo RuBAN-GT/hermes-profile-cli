@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/) and
 [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.6.0] - 2026-09-04
+
+### Added
+
+- TUI language switch EN/RU via `ctrl+l`, persisted as `ui.language`.
+
+## [0.5.0] - 2026-09-04
+
+### Added
+
+- TUI auth hub covers map status, bind, import, export, push, sources, and
+  shared status in addition to sync.
+- TUI More menu: discard-runtime apply, backups, and profile delete.
+- `ctrl+t` cycles only Hermes themes.
+
+### Fixed
+
+- Theme switching used hardcoded Dracula colors and Textual builtin palettes,
+  so Nord/Gruvbox did not apply. Screens now use theme variables, and builtin
+  themes are unregistered.
+
+## [0.4.0] - 2026-09-04
+
+### Added
+
+- `fragments/auth-map.yaml` binds profiles to named identity stores or shared
+  providers without storing tokens.
+- `apply` / `auth bind` attach an identity by moving the live store into the
+  profile and leaving a pointer under `<root>/identities/`.
+- Generic auth adapters for OpenCode, Codex CLI, and Hermes stores.
+- `auth map-status`, `auth sources`, `auth import`, `auth export`, and
+  `auth push --host` copy selected provider slices, including over SSH.
+
+### Changed
+
+- Help and README cover auth-map bindings and adapter transfers.
+
 ## [0.3.0] - 2026-09-03
 
 ### Added

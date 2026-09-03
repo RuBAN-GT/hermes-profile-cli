@@ -17,6 +17,8 @@ environment fragments. Profile selection and file generation happen **before**
 - [Daily Operations](#daily-operations)
 - [Merging, Drift, And Secrets](#merging-drift-and-secrets)
 - [Shared Auth](#shared-auth)
+- [Auth Map And Identities](#auth-map-and-identities)
+- [Auth Adapters](#auth-adapters)
 - [Setup Backups](#setup-backups)
 - [Remote Hosts](#remote-hosts)
 - [Updates And Help](#updates-and-help)
@@ -67,8 +69,9 @@ hermes-profile tui
 ```
 
 First choose this computer or an SSH host, then set the manager, profiles, and
-fragments paths. In the TUI, `?` or `F1` opens concise help; the selected theme
-is saved in the manager configuration.
+fragments paths. In the TUI, `?` or `F1` opens concise help; `ctrl+t` cycles
+Hermes themes; `u` opens the auth hub; `m` opens backups, bind, and delete.
+The selected theme is saved in the manager configuration.
 
 For non-interactive use, run `init`:
 
@@ -123,6 +126,7 @@ config:
 env:
   - env/common.env
   - env/tyrion.private.env
+auth: tyrion
 ```
 
 After creation and application, a profile looks like this:
@@ -134,7 +138,7 @@ After creation and application, a profile looks like this:
   .env
   runtime-config.yaml
   runtime.env
-  auth.json                     # Hermes-owned; never written for a profile
+  auth.json                     # Hermes-owned live store; bound from an identity
   state/
     applied-config.yaml
     applied.env
@@ -157,6 +161,12 @@ start with a letter or digit, and have a maximum length of 63 characters.
 | `apply NAME` | render fragments into `config.yaml` and `.env` |
 | `reconcile NAME` | preserve Hermes changes in the runtime overlay |
 | `auth shared-status` | inspect the Hermes root auth fallback |
+| `auth map-status` | inspect identity bindings without exposing secrets |
+| `auth bind NAME` | attach mapped identity stores to a profile |
+| `auth sources --from ADAPTER` | list OpenCode, Codex, or Hermes credentials |
+| `auth import --from ADAPTER --identity NAME` | import into an identity or shared store |
+| `auth export --to ADAPTER --identity NAME` | export an identity through an adapter |
+| `auth push --host HOST --identity NAME` | copy an identity or shared slice over SSH |
 | `auth sync --from NAME --provider ID` | copy selected providers into shared auth |
 | `backup create` | snapshot fragments and profile declarations |
 | `backup list` | list setup backups |
@@ -251,6 +261,90 @@ provider records and therefore continue to shadow the shared fallback.
 OAuth providers require `--allow-oauth`: after a sync, remove the source
 profile's local override during its planned migration so only the shared store
 can refresh that credential.
+
+## Auth Map And Identities
+
+`fragments/auth-map.yaml` is a binding table, not a token store. OAuth refresh
+tokens are single-use: the manager never copies them between profiles. Named
+identities are live Hermes stores. `apply` and `auth bind` attach an identity
+to a profile by moving the store to `<profiles_dir>/<profile>/auth.json` and
+leaving `<root>/identities/<name>/auth.json` as a pointer to that file.
+
+```yaml
+# fragments/auth-map.yaml
+defaults:
+  xai-oauth: shared
+
+identities:
+  codex-gogol:
+    provider: openai-codex
+  codex-tyrion:
+    provider: openai-codex
+
+profiles:
+  gogol:
+    - codex-gogol
+  tyrion:
+    - codex-tyrion
+```
+
+Layout:
+
+```text
+<root>/
+  auth.json                      # shared fallback, e.g. one xAI account
+  identities/
+    codex-gogol/auth.json        # pointer to profiles/gogol/auth.json
+    codex-tyrion/auth.json
+  profiles/
+    gogol/auth.json              # live Codex account A
+    tyrion/auth.json             # live Codex account B
+```
+
+`xai-oauth: shared` means both profiles omit that provider locally and read
+`<root>/auth.json`. A local identity for the same provider would shadow it.
+
+```bash
+hermes-profile auth map-status
+hermes-profile auth bind gogol
+hermes-profile apply gogol
+```
+
+`preflight` reports bindings, missing identities, and whether a local store
+shadows a shared provider. It never prints tokens. `backup` includes
+`auth-map.yaml` with other fragments and still excludes identity and profile
+auth stores.
+
+Optional `auth:` in `profile.yaml` selects a different map key; the default is
+the profile name.
+
+## Auth Adapters
+
+Import and export go through a generic adapter: `opencode`, `codex`, or
+`hermes`. OpenCode `openai` / `chatgpt` maps to Hermes `openai-codex`; OpenCode
+`xai` OAuth maps to `xai-oauth`. Codex CLI (`~/.codex/auth.json`) only carries
+Codex OAuth. API keys stay in env fragments.
+
+```bash
+hermes-profile auth sources --from opencode
+hermes-profile auth import --from opencode --provider openai --identity codex-gogol --allow-oauth
+hermes-profile auth import --from opencode --provider openai --source-profile work --identity codex-tyrion --allow-oauth
+hermes-profile auth import --from codex --identity codex-gogol --allow-oauth
+hermes-profile auth export --to opencode --identity codex-gogol --provider openai-codex --allow-oauth
+hermes-profile auth push --host gateway-a --identity codex-gogol --allow-oauth
+hermes-profile auth push --host gateway-a --shared --provider xai-oauth --allow-oauth
+hermes-profile --host gateway-a apply gogol
+```
+
+OpenCode native store: `$XDG_DATA_HOME/opencode/auth.json` (or
+`~/.local/share/opencode/auth.json`). Named OpenCode profiles:
+`$XDG_CONFIG_HOME/opencode/auth-profiles/<provider>/<profile>.json`.
+Overrides: `OPENCODE_AUTH`, `OPENCODE_AUTH_PROFILES`, `CODEX_HOME`.
+
+OAuth import, export, and push require `--allow-oauth`. After a transfer, only
+one process should refresh that credential. `auth push` runs locally, copies
+the resolved identity or a merged shared provider slice over SSH, and does not
+use global `--host`. Then bind or apply on the remote host.
 
 ## Setup Backups
 

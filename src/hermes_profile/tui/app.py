@@ -2,6 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
 
+import yaml
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -18,10 +19,22 @@ from textual.widgets import (
 )
 from textual.worker import Worker, WorkerState
 
+from hermes_profile.auth_adapters import (
+    export_auth,
+    import_auth,
+    list_sources,
+    push_auth,
+)
+from hermes_profile.i18n import language, next_language, set_language, t
 from hermes_profile.models import LocalLocation, Settings
-from hermes_profile.paths import delete_location, load_settings, set_theme
+from hermes_profile.paths import (
+    delete_location,
+    load_settings,
+    save_language,
+    set_theme,
+)
 from hermes_profile.profiles import list_profiles
-from hermes_profile.themes import THEMES
+from hermes_profile.themes import apply_hermes_themes, next_theme
 from hermes_profile.transport import SSH_TIMEOUT_SECONDS, LocalTransport, SshTransport
 from hermes_profile.tui.help import HelpScreen
 from hermes_profile.tui.location_home import LocationHomeScreen
@@ -33,13 +46,23 @@ from hermes_profile.tui.location_setup import (
     LocalLocationScreen,
     LocationTypeScreen,
 )
+from hermes_profile.tui.menus import (
+    AuthHubScreen,
+    AuthTransferScreen,
+    BackupScreen,
+    MoreActionsScreen,
+)
 from hermes_profile.tui.ssh_setup import SshSetupScreen
 
-STATUS_LABELS = {
-    "config_drift": "Config",
-    "env_drift": "Environment",
-    "auth_inventory_changed": "Auth inventory",
-}
+
+def status_labels() -> dict[str, str]:
+    return {
+        "config_drift": t("status_config"),
+        "env_drift": t("status_env"),
+        "auth_inventory_changed": t("status_auth"),
+    }
+
+
 WORKSPACE_ACTIONS = {
     "refresh",
     "preview",
@@ -49,6 +72,9 @@ WORKSPACE_ACTIONS = {
     "back",
     "create_profile",
     "auth",
+    "more",
+    "backup",
+    "delete_profile",
     "init_remote",
 }
 
@@ -83,9 +109,12 @@ def format_preview(name: str, config: object, env_count: object) -> str:
     key_width = max((len(key) for key, _, _ in rows), default=3)
     key_width = min(max(key_width, 8), 28)
     lines = [
-        f"[b]{name}[/]  preview",
+        f"[b]{t('preview_title', name=name)}[/]",
         "",
-        f"{'Key':<{key_width}}  {'Kind':<6}  Contents",
+        (
+            f"{t('preview_key'):<{key_width}}  "
+            f"{t('preview_kind'):<6}  {t('preview_contents')}"
+        ),
         f"{'─' * key_width}  {'─' * 6}  {'─' * 8}",
     ]
     for key, kind, contents in rows:
@@ -94,27 +123,41 @@ def format_preview(name: str, config: object, env_count: object) -> str:
     lines.extend(
         [
             "",
-            f"Environment: {env_count} variable(s), values redacted",
+            t("preview_env", count=env_count),
         ]
     )
     return "\n".join(lines)
 
 
 def format_preflight(result: dict[str, Any]) -> str:
-    config_diff = result.get("config_diff") or "No effective config changes."
-    lines = ["[b]Preflight[/]", "", config_diff.rstrip(), ""]
+    config_diff = result.get("config_diff") or t("no_config_changes")
+    lines = [f"[b]{t('preflight_title')}[/]", "", config_diff.rstrip(), ""]
     materialization = result.get("materialization_diff", "")
     if materialization:
-        lines.extend(["[b]File materialization diff[/]", materialization.rstrip(), ""])
+        lines.extend([f"[b]{t('file_diff')}[/]", materialization.rstrip(), ""])
     if result.get("legacy_managed_layer"):
-        lines.append("legacy managed layer: present")
-    for key, label in (
-        ("env_added", "Environment added"),
-        ("env_changed", "Environment changed"),
-        ("env_removed", "Environment removed"),
+        lines.append(t("legacy_layer"))
+    for key, label_key in (
+        ("env_added", "env_added"),
+        ("env_changed", "env_changed"),
+        ("env_removed", "env_removed"),
     ):
         names = result.get(key, [])
-        lines.append(f"{label}: {', '.join(names) if names else 'none'}")
+        lines.append(f"{t(label_key)}: {', '.join(names) if names else t('none')}")
+    bindings = result.get("bindings")
+    if isinstance(bindings, list):
+        if not bindings:
+            lines.append(t("auth_bindings_none"))
+        for item in bindings:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                t(
+                    "auth_binding",
+                    provider=item.get("provider"),
+                    target=item.get("target"),
+                )
+            )
     return "\n".join(lines)
 
 
@@ -127,6 +170,16 @@ class ProfileTransport(Protocol):
 
     def create(self, name: str) -> None: ...
 
+    def delete(self, name: str) -> None: ...
+
+    def bind_auth(self, name: str, *, force: bool = False) -> dict[str, Any]: ...
+
+    def auth_map_status(self) -> dict[str, Any]: ...
+
+    def shared_status(self) -> dict[str, Any]: ...
+
+    def backup(self, action: str, name: str | None = None) -> dict[str, Any]: ...
+
     def sync_auth(
         self, source: str, providers: list[str], allow_oauth: bool
     ) -> dict[str, Any]: ...
@@ -137,9 +190,7 @@ class ProfileApp(App[None]):
 
     CSS = """
     Screen { background: $background; color: $foreground; }
-    Header { background: $primary; color: $foreground; text-style: bold; }
-    Footer { background: $secondary; color: $foreground; }
-    FooterKey { background: $primary; color: $foreground; }
+    Header { background: $primary; color: $text; text-style: bold; }
     #content { height: 1fr; padding: 0 1 0 1; }
     #workspace-bar { height: 1; margin: 1 0; }
     #back-locations {
@@ -201,8 +252,9 @@ class ProfileApp(App[None]):
     }
     #back-locations:hover, #add-profile:hover, #actions Button:hover {
         background: $primary;
-        color: $background;
+        color: $text;
     }
+    #more { color: $text-muted; }
     #preview { color: $primary; }
     #preflight { color: $accent; }
     #reconcile { color: $warning; }
@@ -220,10 +272,15 @@ class ProfileApp(App[None]):
         Binding("n", "create_profile", "New"),
         Binding("p", "preview", "Preview"),
         Binding("f", "preflight", "Preflight"),
-        Binding("c", "reconcile", "Reconcile"),
-         Binding("a", "apply", "Apply"),
+        Binding("a", "apply", "Apply"),
         Binding("u", "auth", "Auth"),
-        Binding("i", "init_remote", "Init remote"),
+        Binding("m", "more", "More"),
+        Binding("ctrl+t", "cycle_theme", "Theme"),
+        Binding("ctrl+l", "cycle_language", "Lang"),
+        Binding("c", "reconcile", "Reconcile", show=False),
+        Binding("b", "backup", "Backup", show=False),
+        Binding("d", "delete_profile", "Delete", show=False),
+        Binding("i", "init_remote", "Init remote", show=False),
         Binding("question_mark", "help", "Help", key_display="?"),
         Binding("f1", "help", "Help", show=False),
     ]
@@ -242,32 +299,60 @@ class ProfileApp(App[None]):
         yield Header()
         with Vertical(id="content"):
             with Horizontal(id="workspace-bar"):
-                yield Button("← Locations", id="back-locations")
-                yield Label("Open a location to manage its profiles.", id="summary")
+                yield Button(t("locations"), id="back-locations")
+                yield Label(t("summary_open"), id="summary")
                 yield LoadingIndicator(id="loading")
             with Horizontal(id="workspace-body"):
                 with Vertical(id="profile-panel"):
-                    yield Label("Profiles", id="profiles-title")
+                    yield Label(t("profiles"), id="profiles-title")
                     yield ListView(id="profiles")
-                    yield Button("New profile", id="add-profile")
+                    yield Button(t("new_profile"), id="add-profile")
                 with Vertical(id="detail"):
-                    yield Static(
-                        "Pick a location, then select a profile.",
-                        id="profile-detail",
-                    )
+                    yield Static(t("pick_location"), id="profile-detail")
                     with Horizontal(id="actions"):
-                        yield Button("Preview", id="preview", disabled=True)
-                        yield Button("Preflight", id="preflight", disabled=True)
-                        yield Button("Reconcile", id="reconcile", disabled=True)
-                        yield Button("Apply", id="apply", disabled=True)
-                        yield Button("Auth", id="auth", disabled=True)
+                        yield Button(
+                            t("preview"),
+                            id="preview",
+                            disabled=True,
+                            tooltip=t("tooltip_preview"),
+                        )
+                        yield Button(
+                            t("preflight"),
+                            id="preflight",
+                            disabled=True,
+                            tooltip=t("tooltip_preflight"),
+                        )
+                        yield Button(
+                            t("reconcile"),
+                            id="reconcile",
+                            disabled=True,
+                            tooltip=t("tooltip_reconcile"),
+                        )
+                        yield Button(
+                            t("apply"),
+                            id="apply",
+                            disabled=True,
+                            tooltip=t("tooltip_apply"),
+                        )
+                        yield Button(
+                            t("auth"),
+                            id="auth",
+                            disabled=True,
+                            tooltip=t("tooltip_auth"),
+                        )
+                        yield Button(
+                            t("more"),
+                            id="more",
+                            disabled=True,
+                            tooltip=t("tooltip_more"),
+                        )
         yield Footer()
 
     def on_mount(self) -> None:
-        for theme in THEMES:
-            self.register_theme(theme)
-        self.theme = self.settings.theme
+        set_language(self.settings.language)
+        apply_hermes_themes(self, self.settings.theme)
         self.query_one("#loading", LoadingIndicator).display = False
+        self._relabel_workspace()
         self.push_screen(LocationHomeScreen(self))
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -276,7 +361,16 @@ class ProfileApp(App[None]):
         if action == "init_remote" and not self.selected_host.startswith("ssh--"):
             return False
         if (
-            action in {"preview", "preflight", "reconcile", "apply", "auth"}
+            action
+            in {
+                "preview",
+                "preflight",
+                "reconcile",
+                "apply",
+                "auth",
+                "more",
+                "delete_profile",
+            }
             and self.selected_profile is None
         ):
             return None
@@ -301,25 +395,80 @@ class ProfileApp(App[None]):
 
     def action_apply(self) -> None:
         if self.selected_profile is None:
-            self.notify("Select a profile first.", severity="warning")
+            self.notify(t("select_profile_first"), severity="warning")
             return
         self.push_screen(
             ConfirmScreen(
-                "Apply profile",
-                f"Write rendered config and env for {self.selected_profile}?\n"
-                "This overwrites config.yaml and .env when there is no drift.",
-                "Apply",
+                t("apply_profile"),
+                t("apply_body", name=self.selected_profile),
+                t("apply"),
             ),
             lambda confirmed: self._start_action("apply") if confirmed else None,
         )
 
+    def action_cycle_theme(self) -> None:
+        self.theme = next_theme(self.theme)
+        self.notify(t("theme_set", theme=self.theme))
+
+    def action_cycle_language(self) -> None:
+        lang = set_language(next_language(language()))
+        save_language(self.config, lang)
+        self._relabel_workspace()
+        screen = self.screen
+        if isinstance(screen, LocationHomeScreen):
+            screen.relabel()
+        self.notify(t("language_set", language=lang.upper()))
+
+    def _relabel_workspace(self) -> None:
+        self.query_one("#back-locations", Button).label = t("locations")
+        self.query_one("#summary", Label).update(t("summary_open"))
+        self.query_one("#profiles-title", Label).update(t("profiles"))
+        self.query_one("#add-profile", Button).label = t("new_profile")
+        self.query_one("#preview", Button).label = t("preview")
+        self.query_one("#preflight", Button).label = t("preflight")
+        self.query_one("#reconcile", Button).label = t("reconcile")
+        self.query_one("#apply", Button).label = t("apply")
+        self.query_one("#auth", Button).label = t("auth")
+        self.query_one("#more", Button).label = t("more")
+        for button_id, tip in (
+            ("preview", "tooltip_preview"),
+            ("preflight", "tooltip_preflight"),
+            ("reconcile", "tooltip_reconcile"),
+            ("apply", "tooltip_apply"),
+            ("auth", "tooltip_auth"),
+            ("more", "tooltip_more"),
+        ):
+            self.query_one(f"#{button_id}", Button).tooltip = t(tip)
+
     def action_auth(self) -> None:
         if self.selected_profile is None:
-            self.notify("Select a source profile first.", severity="warning")
+            self.notify(t("select_profile_first"), severity="warning")
             return
+        self.push_screen(AuthHubScreen(), self._auth_hub_chosen)
+
+    def action_more(self) -> None:
+        if self.selected_profile is None:
+            self.notify(t("select_profile_first"), severity="warning")
+            return
+        self.push_screen(MoreActionsScreen(), self._more_chosen)
+
+    def action_backup(self) -> None:
+        self._set_busy(f"{self.location_title}: listing backups...")
+        self.run_extra("Backups", "backup-list", {})
+
+    def action_delete_profile(self) -> None:
+        if self.selected_profile is None:
+            self.notify(t("select_profile_first"), severity="warning")
+            return
+        name = self.selected_profile
         self.push_screen(
-            AuthSyncScreen(self.selected_profile),
-            self._auth_sync_requested,
+            ConfirmScreen(
+                t("delete_profile"),
+                t("delete_profile_body", name=name),
+                t("delete"),
+                danger=True,
+            ),
+            lambda confirmed: self._start_delete_profile(name) if confirmed else None,
         )
 
     def action_back(self) -> None:
@@ -349,6 +498,8 @@ class ProfileApp(App[None]):
             self.action_apply()
         elif event.button.id == "auth":
             self.action_auth()
+        elif event.button.id == "more":
+            self.action_more()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id is None or event.list_view.id != "profiles":
@@ -384,6 +535,8 @@ class ProfileApp(App[None]):
             self._handle_operation(event)
         elif event.worker.group == "auth":
             self._handle_auth_sync(event)
+        elif event.worker.group == "extra":
+            self._handle_extra(event)
         elif event.worker.group == "remote-init":
             self._handle_remote_init(event)
 
@@ -405,23 +558,29 @@ class ProfileApp(App[None]):
             drifted += int(dirty)
             state = "changed" if dirty else "clean"
             profiles.append(
-                ListItem(Label(f"● {name}  {state}", classes=state), id=name)
+                ListItem(Label(f"● {name}  {t(state)}", classes=state), id=name)
             )
-        self.query_one("#profiles-title", Label).update(f"Profiles ({len(result)})")
+        self.query_one("#profiles-title", Label).update(
+            t("profiles_n", count=len(result))
+        )
         if not result:
             self.selected_profile = None
             self._set_actions(False)
             self.query_one("#profile-detail", Static).update(
-                f"No profiles in {self.location_title} yet.\n\n"
-                "Press n or use New profile to create one."
+                t("no_profiles", location=self.location_title)
             )
             self.query_one("#summary", Label).update(
-                f"{self.location_title} · empty workspace"
+                t("empty_workspace", location=self.location_title)
             )
             return
+        drift = t("drifted", count=drifted) if drifted else t("all_clean")
         self.query_one("#summary", Label).update(
-            f"{self.location_title} · {len(result)} profile(s)"
-            + (f" · {drifted} drifted" if drifted else " · all clean")
+            t(
+                "summary_profiles",
+                location=self.location_title,
+                count=len(result),
+                drift=drift,
+            )
         )
         if self.selected_profile in self.profile_status:
             self._show_status(
@@ -430,24 +589,27 @@ class ProfileApp(App[None]):
         else:
             self.selected_profile = None
             self._set_actions(False)
-            self.query_one("#profile-detail", Static).update(
-                "Select a profile to inspect it.\n\n"
-                "Preview shows rendered config. Reconcile keeps runtime edits. "
-                "Apply writes config.yaml and .env."
-            )
+            self.query_one("#profile-detail", Static).update(t("select_profile"))
 
     def _show_load_error(self, error: object) -> None:
         message = str(error)
         self.selected_profile = None
         self.profile_status = {}
         self._set_actions(False)
-        self.query_one("#profiles-title", Label).update("Profiles")
-        self.query_one("#summary", Label).update(f"{self.location_title} · unavailable")
-        hint = "esc back to locations · r to retry"
+        self.query_one("#profiles-title", Label).update(t("profiles"))
+        self.query_one("#summary", Label).update(
+            t("unavailable", location=self.location_title)
+        )
+        hint = t("hint_retry")
         if self.selected_host.startswith("ssh--"):
-            hint += " · i create remote dirs/config"
+            hint += t("hint_init")
         self.query_one("#profile-detail", Static).update(
-            f"[b]Could not open {self.location_title}[/]\n\n{message}\n\n[dim]{hint}[/]"
+            t(
+                "could_not_open",
+                location=self.location_title,
+                message=message,
+                hint=hint,
+            )
         )
 
     def _handle_operation(self, event: Worker.StateChanged) -> None:
@@ -503,7 +665,7 @@ class ProfileApp(App[None]):
 
     def _start_action(self, action: str) -> None:
         if self.selected_profile is None:
-            self.notify("Select a profile first.", severity="warning")
+            self.notify(t("select_profile_first"), severity="warning")
             return
         remote = self.selected_host.startswith("ssh--")
         via = " over SSH" if remote else ""
@@ -533,18 +695,12 @@ class ProfileApp(App[None]):
         for key, value in current.items():
             state = "changed" if value else "clean"
             color = "warning" if value else "success"
-            label = STATUS_LABELS.get(key, key)
-            lines.append(f"[{color}]●[/{color}] {label}  {state}")
+            label = status_labels().get(key, key)
+            lines.append(f"[{color}]●[/{color}] {label}  {t(state)}")
         if any(current.values()):
-            lines.extend(
-                [
-                    "",
-                    "Runtime files differ from the last apply.",
-                    "Reconcile keeps those edits, then Apply writes the result.",
-                ]
-            )
+            lines.extend(["", t("runtime_differs")])
         else:
-            lines.extend(["", "Clean. Preview the render, or Apply to write files."])
+            lines.extend(["", t("status_clean")])
         self.query_one("#profile-detail", Static).update("\n".join(lines))
 
     def _set_actions(self, enabled: bool) -> None:
@@ -571,15 +727,14 @@ class ProfileApp(App[None]):
         if allow_oauth:
             self.push_screen(
                 ConfirmScreen(
-                    "Sync OAuth credentials",
-                    "Copy selected OAuth providers to the shared fallback?\n"
-                    "Existing local providers will continue to shadow it.",
-                    "Sync",
+                    t("sync_oauth"),
+                    t("sync_oauth_body"),
+                    t("sync"),
                     danger=True,
                 ),
-                lambda confirmed: self._start_auth_sync(providers, allow_oauth)
-                if confirmed
-                else None,
+                lambda confirmed: (
+                    self._start_auth_sync(providers, allow_oauth) if confirmed else None
+                ),
             )
             return
         self._start_auth_sync(providers, allow_oauth)
@@ -592,6 +747,220 @@ class ProfileApp(App[None]):
             "[b]Shared auth[/]\n\nSyncing selected provider records...",
         )
         self.run_auth_sync(self.selected_profile, providers, allow_oauth)
+
+    def _auth_hub_chosen(self, action: str | None) -> None:
+        if action is None:
+            return
+        if action == "sync":
+            if self.selected_profile is None:
+                return
+            self.push_screen(
+                AuthSyncScreen(self.selected_profile),
+                self._auth_sync_requested,
+            )
+            return
+        if action == "bind":
+            self._start_bind()
+            return
+        if action in {"shared-status", "map-status"}:
+            title = "Shared auth" if action == "shared-status" else "Auth map"
+            self._set_busy(f"{self.location_title}: {title}...")
+            self.run_extra(title, action, {})
+            return
+        if action in {"import", "export", "push", "sources"}:
+            self.push_screen(
+                AuthTransferScreen(action, sorted(self.settings.hosts)),
+                self._auth_transfer_requested,
+            )
+
+    def _more_chosen(self, action: str | None) -> None:
+        if action == "reconcile":
+            self.action_reconcile()
+        elif action == "discard":
+            self._confirm_discard_apply()
+        elif action == "bind":
+            self._start_bind()
+        elif action == "backup":
+            self.action_backup()
+        elif action == "delete":
+            self.action_delete_profile()
+
+    def _confirm_discard_apply(self) -> None:
+        if self.selected_profile is None:
+            return
+        self.push_screen(
+            ConfirmScreen(
+                t("discard_apply"),
+                t("discard_body", name=self.selected_profile),
+                t("discard_confirm"),
+                danger=True,
+            ),
+            lambda confirmed: (
+                self._start_action("apply-discard") if confirmed else None
+            ),
+        )
+
+    def _start_bind(self) -> None:
+        if self.selected_profile is None:
+            return
+        self._set_busy(
+            f"{self.selected_profile}: binding auth...",
+            "[b]Auth bind[/]\n\nAttaching mapped identity stores...",
+        )
+        self.run_extra("Auth bind", "bind", {"name": self.selected_profile})
+
+    def _start_delete_profile(self, name: str) -> None:
+        self._set_busy(f"{name}: deleting...")
+        self.run_extra("Delete profile", "delete", {"name": name})
+
+    def _auth_transfer_requested(self, payload: dict[str, object] | None) -> None:
+        if payload is None:
+            return
+        if payload.get("allow_oauth"):
+            self.push_screen(
+                ConfirmScreen(
+                    t("copy_oauth"),
+                    t("copy_oauth_body"),
+                    t("continue"),
+                    danger=True,
+                ),
+                lambda confirmed: self._start_transfer(payload) if confirmed else None,
+            )
+            return
+        self._start_transfer(payload)
+
+    def _start_transfer(self, payload: dict[str, object]) -> None:
+        mode = str(payload["mode"])
+        self._set_busy(f"{mode} in progress...")
+        self.run_extra(mode.title(), mode, payload)
+
+    def _open_backup_screen(self, backups: list[str]) -> None:
+        self.push_screen(BackupScreen(backups), self._backup_chosen)
+
+    def _backup_chosen(self, request: tuple[str, str | None] | None) -> None:
+        if request is None:
+            return
+        action, name = request
+        if action == "create":
+            self._set_busy("Creating backup...")
+            self.run_extra("Backup create", "backup-create", {})
+            return
+        if not name:
+            self.notify(t("select_backup_first"), severity="warning")
+            return
+        self.push_screen(
+            ConfirmScreen(
+                t("restore_backup"),
+                t("restore_body", name=name),
+                t("restore"),
+                danger=True,
+            ),
+            lambda confirmed: self._start_backup_restore(name) if confirmed else None,
+        )
+
+    def _start_backup_restore(self, name: str) -> None:
+        self._set_busy(f"Restoring {name}...")
+        self.run_extra("Backup restore", "backup-restore", {"name": name})
+
+    @work(thread=True, exclusive=True, group="extra", exit_on_error=False)
+    def run_extra(
+        self, title: str, kind: str, payload: dict[str, object]
+    ) -> tuple[str, dict[str, Any]]:
+        return title, self._run_extra(kind, payload)
+
+    def _run_extra(self, kind: str, payload: dict[str, object]) -> dict[str, Any]:
+        if kind == "shared-status":
+            return self.transport.shared_status()
+        if kind == "map-status":
+            return self.transport.auth_map_status()
+        if kind == "bind":
+            return self.transport.bind_auth(str(payload["name"]))
+        if kind == "delete":
+            name = str(payload["name"])
+            self.transport.delete(name)
+            return {"deleted": name}
+        if kind == "backup-list":
+            return self.transport.backup("list")
+        if kind == "backup-create":
+            return self.transport.backup("create")
+        if kind == "backup-restore":
+            return self.transport.backup("restore", str(payload["name"]))
+        if kind == "sources":
+            path = payload.get("path")
+            return list_sources(
+                str(payload["adapter"]),
+                path if isinstance(path, Path) else None,
+            )
+        settings = self._local_settings()
+        if kind == "import":
+            return import_auth(
+                settings,
+                source=str(payload["adapter"]),
+                identity=_optional_str(payload.get("identity")),
+                provider=_optional_str(payload.get("provider")),
+                source_profile=_optional_str(payload.get("source_profile")),
+                path=_payload_path(payload),
+                shared=bool(payload.get("shared")),
+                allow_oauth=bool(payload.get("allow_oauth")),
+            )
+        if kind == "export":
+            return export_auth(
+                settings,
+                destination=str(payload["adapter"]),
+                identity=_optional_str(payload.get("identity")),
+                provider=_optional_str(payload.get("provider")),
+                source_profile=_optional_str(payload.get("source_profile")),
+                path=_payload_path(payload),
+                shared=bool(payload.get("shared")),
+                allow_oauth=bool(payload.get("allow_oauth")),
+            )
+        if kind == "push":
+            return push_auth(
+                settings,
+                self.settings.hosts[str(payload["host"])],
+                identity=_optional_str(payload.get("identity")),
+                providers=list(payload.get("providers") or []),
+                shared=bool(payload.get("shared")),
+                allow_oauth=bool(payload.get("allow_oauth")),
+            )
+        raise ValueError(f"unsupported extra action: {kind}")
+
+    def _local_settings(self) -> Settings:
+        if isinstance(self.transport, LocalTransport):
+            return self.transport.settings
+        return self.settings
+
+    def _handle_extra(self, event: Worker.StateChanged) -> None:
+        if event.state not in {WorkerState.ERROR, WorkerState.SUCCESS}:
+            return
+        self._set_busy(None)
+        if event.state == WorkerState.ERROR:
+            self.notify(str(event.worker.error), severity="error")
+            self.query_one("#profile-detail", Static).update(
+                f"[b]Action failed[/]\n\n{event.worker.error}"
+            )
+            return
+        title, result = event.worker.result
+        if title == "Backups":
+            backups = result.get("backups", [])
+            if not isinstance(backups, list):
+                backups = []
+            self._open_backup_screen([str(item) for item in backups])
+            return
+        if title == "Delete profile":
+            deleted = result.get("deleted")
+            self.selected_profile = None
+            self.notify(f"Deleted {deleted}")
+            self.action_refresh()
+            return
+        self.query_one("#summary", Label).update(f"{self.location_title} · {title}")
+        self.query_one("#profile-detail", Static).update(
+            f"[b]{title}[/]\n\n"
+            + yaml.safe_dump(result, allow_unicode=False, sort_keys=False)
+        )
+        self.notify(title)
+        if title in {"Auth bind", "Backup create", "Backup restore"}:
+            self.action_refresh()
 
     def edit_location(self, identifier: str, callback: Any) -> None:
         if identifier == "local":
@@ -649,13 +1018,14 @@ class ProfileApp(App[None]):
             self.notify("Location saved")
 
     def location_items(self) -> list[tuple[str, str, str]]:
-        items = [("local", "local", "this machine")]
+        items = [("local", "local", t("kind_local"))]
         items.extend(
-            (f"local--{alias}", alias, "local folder")
+            (f"local--{alias}", alias, t("kind_folder"))
             for alias in sorted(self.settings.local_locations)
         )
         items.extend(
-            (f"ssh--{alias}", alias, "ssh") for alias in sorted(self.settings.hosts)
+            (f"ssh--{alias}", alias, t("kind_ssh"))
+            for alias in sorted(self.settings.hosts)
         )
         return items
 
@@ -664,10 +1034,9 @@ class ProfileApp(App[None]):
             count = len(list_profiles(self.settings))
             return (
                 "local",
-                "This machine",
+                t("this_machine"),
                 f"{self.settings.profiles_dir}\n\n"
-                f"{count} profile(s) in the primary workspace.\n"
-                "Press Enter to open.",
+                + t("profiles_in_workspace", count=count),
             )
         kind, alias = identifier.split("--", 1)
         if kind == "local":
@@ -684,10 +1053,8 @@ class ProfileApp(App[None]):
             )
             return (
                 alias,
-                "Local folder",
-                f"{location.profiles_dir}\n\n"
-                f"{count} profile(s) in this folder.\n"
-                "Press Enter to open.",
+                t("local_folder"),
+                f"{location.profiles_dir}\n\n" + t("profiles_in_folder", count=count),
             )
         host = self.settings.hosts[alias]
         target = (
@@ -697,11 +1064,13 @@ class ProfileApp(App[None]):
             target = f"{target} -p {host.ssh_port}"
         return (
             alias,
-            "SSH host",
-            f"{target}\nprofiles: {host.profiles_dir}\n"
-            f"config: {host.remote_config}\n\n"
-            "e edits paths. i creates remote dirs/config if missing.\n"
-            "Press Enter to open.",
+            t("ssh_host"),
+            t(
+                "ssh_detail",
+                target=target,
+                profiles=host.profiles_dir,
+                config=host.remote_config,
+            ),
         )
 
     def open_location(self, identifier: str) -> None:
@@ -720,7 +1089,7 @@ class ProfileApp(App[None]):
 
     def confirm_init_remote(self, identifier: str) -> None:
         if not identifier.startswith("ssh--"):
-            self.notify("Remote init is only for SSH locations.", severity="warning")
+            self.notify(t("remote_init_only"), severity="warning")
             return
         _, alias = identifier.split("--", 1)
         host = self.settings.hosts[alias]
@@ -828,3 +1197,14 @@ class ProfileApp(App[None]):
                 )
             )
         return SshTransport(self.settings.hosts[alias])
+
+
+def _optional_str(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _payload_path(payload: dict[str, object]) -> Path | None:
+    path = payload.get("path")
+    return path if isinstance(path, Path) else None

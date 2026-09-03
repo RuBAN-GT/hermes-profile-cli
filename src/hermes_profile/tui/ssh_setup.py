@@ -51,7 +51,7 @@ class SshSetupScreen(ModalScreen[bool]):
     #init-ssh { color: $primary; }
     #install-ssh { color: $accent; }
     #cancel-ssh { color: $foreground; }
-    #ssh-actions Button:hover { background: $primary; color: $background; }
+    #ssh-actions Button:hover { background: $primary; color: $text; }
     """
 
     def __init__(self, config: Path, host: Host | None = None) -> None:

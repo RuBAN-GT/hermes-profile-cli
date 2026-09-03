@@ -215,9 +215,7 @@ def test_sync_shared_auth_copies_only_selected_provider(tmp_path: Path) -> None:
     )
 
     source_before = (source / "auth.json").read_bytes()
-    result = sync_shared_auth(
-        settings, "tyrion", ["xai-oauth"], allow_oauth=False
-    )
+    result = sync_shared_auth(settings, "tyrion", ["xai-oauth"], allow_oauth=False)
 
     assert result == {
         "synced_from": "tyrion",

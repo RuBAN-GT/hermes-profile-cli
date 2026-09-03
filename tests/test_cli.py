@@ -11,6 +11,8 @@ def test_help_command_prints_guide(capsys: pytest.CaptureFixture[str]) -> None:
     assert "manager config" in out
     assert "preflight NAME" in out
     assert "auth sync" in out
+    assert "auth import" in out
+    assert "auth push" in out
     assert "backup create" in out
 
 

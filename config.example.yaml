@@ -10,6 +10,7 @@ fragments_dir: /opt/hermes/managed/fragments
 ui:
   animations: true
   theme: hermes-dracula
+  language: en
 
 # Additional local locations are independent profile/fragment roots on this host.
 # local_locations:

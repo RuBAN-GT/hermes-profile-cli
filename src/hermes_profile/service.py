@@ -1,15 +1,21 @@
-import copy
 import difflib
-import fcntl
-import hashlib
-import json
-import time
-from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from hermes_profile.auth_map import auth_preflight, bind_profile_auth, load_auth_map
+from hermes_profile.auth_store import (
+    auth_inventory_changed,
+    auth_locks,
+    copy_auth_providers,
+    load_auth_store,
+    providers_contain_refresh_tokens,
+    save_auth_store,
+    shared_auth_path,
+    store_providers,
+    write_auth_inventory,
+)
 from hermes_profile.env import parse_env, render_env
 from hermes_profile.merge import NO_CHANGE, changed_values, merge
 from hermes_profile.models import Settings
@@ -49,7 +55,7 @@ def status(settings: Settings, name: str) -> dict[str, bool]:
         "env_drift": _is_drifted(
             directory / ".env", directory / "state" / "applied.env"
         ),
-        "auth_inventory_changed": _auth_inventory_changed(directory),
+        "auth_inventory_changed": auth_inventory_changed(directory),
     }
 
 
@@ -76,6 +82,7 @@ def preflight(settings: Settings, name: str) -> dict[str, object]:
             if proposed_environment[key] != current_environment[key]
         ),
         "env_removed": sorted(set(current_environment) - set(proposed_environment)),
+        **auth_preflight(settings, name),
     }
 
 
@@ -96,13 +103,12 @@ def _yaml_diff(
 
 def shared_auth_status(settings: Settings) -> dict[str, object]:
     """Report the Hermes root auth fallback without exposing credentials."""
-    path = _shared_auth_path(settings)
-    store = _load_auth_store(path, missing_ok=True)
-    providers = sorted(set(store["providers"]) | set(store["credential_pool"]))
+    path = shared_auth_path(settings)
+    store = load_auth_store(path, missing_ok=True)
     return {
         "path": str(path),
         "present": path.is_file(),
-        "providers": providers,
+        "providers": store_providers(store),
     }
 
 
@@ -111,24 +117,24 @@ def sync_shared_auth(
 ) -> dict[str, object]:
     """Copy selected provider records into the Hermes root fallback store."""
     source = profile_dir(settings, source_name) / "auth.json"
-    target = _shared_auth_path(settings)
+    target = shared_auth_path(settings)
     if not source.is_file():
         raise ValueError(f"profile auth store not found: {source}")
     if not providers:
         raise ValueError("auth sync requires at least one --provider")
 
-    with _auth_locks(source, target):
-        source_store = _load_auth_store(source)
-        target_store = _load_auth_store(target, missing_ok=True)
-        if not allow_oauth and _providers_contain_refresh_tokens(
+    with auth_locks(source, target):
+        source_store = load_auth_store(source)
+        target_store = load_auth_store(target, missing_ok=True)
+        if not allow_oauth and providers_contain_refresh_tokens(
             source_store, providers
         ):
             raise ValueError(
                 "selected providers contain OAuth refresh tokens; pass --allow-oauth "
                 "only after planning removal of the profile-local override"
             )
-        copied = _copy_auth_providers(source_store, target_store, providers)
-        write_private(target, json.dumps(target_store, indent=2, sort_keys=True) + "\n")
+        copied = copy_auth_providers(source_store, target_store, providers)
+        save_auth_store(target, target_store)
     return {"synced_from": source_name, "providers": copied, "path": str(target)}
 
 
@@ -158,7 +164,7 @@ def reconcile(settings: Settings, name: str) -> dict[str, bool]:
             write_private(directory / "runtime.env", render_env(overlay))
         write_private(directory / "state" / "applied.env", render_env(actual))
 
-    _write_auth_inventory(directory)
+    write_auth_inventory(directory)
 
     return changes
 
@@ -180,6 +186,9 @@ def apply(settings: Settings, name: str, discard_runtime: bool = False) -> None:
     if discard_runtime:
         (directory / "runtime-config.yaml").unlink(missing_ok=True)
         (directory / "runtime.env").unlink(missing_ok=True)
+    auth_map = load_auth_map(settings)
+    if auth_map.profiles or auth_map.defaults:
+        bind_profile_auth(settings, name)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -211,166 +220,3 @@ def _is_drifted(actual: Path, applied: Path) -> bool:
     if not actual.exists() or not applied.exists():
         return True
     return actual.read_bytes() != applied.read_bytes()
-
-
-def _auth_inventory_changed(directory: Path) -> bool:
-    current = _auth_inventory_digest(directory / "auth.json")
-    applied = directory / "state" / "auth-inventory.sha256"
-    if current is None:
-        return applied.is_file()
-    return not applied.is_file() or applied.read_text().strip() != current
-
-
-def _write_auth_inventory(directory: Path) -> None:
-    digest = _auth_inventory_digest(directory / "auth.json")
-    if digest is not None:
-        write_private(directory / "state" / "auth-inventory.sha256", f"{digest}\n")
-    else:
-        (directory / "state" / "auth-inventory.sha256").unlink(missing_ok=True)
-
-
-def _auth_inventory_digest(path: Path) -> str | None:
-    inventory = _auth_inventory(path)
-    if inventory is None:
-        return None
-    payload = json.dumps(inventory, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode()).hexdigest()
-
-
-def _auth_inventory(path: Path) -> dict[str, list[dict[str, str]]] | None:
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError as error:
-        raise ValueError(f"{path}: invalid auth store JSON") from error
-    if not isinstance(data, dict):
-        raise ValueError(f"{path}: auth store must be an object")
-    pool = data.get("credential_pool", {})
-    if not isinstance(pool, dict):
-        raise ValueError(f"{path}: credential_pool must be an object")
-    inventory: dict[str, list[dict[str, str]]] = {}
-    for provider, entries in pool.items():
-        if not isinstance(provider, str) or not isinstance(entries, list):
-            continue
-        sanitized = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            sanitized.append(
-                {
-                    field: value
-                    for field in ("id", "auth_type", "source")
-                    if isinstance((value := entry.get(field)), str)
-                }
-            )
-        inventory[provider] = sorted(sanitized, key=lambda entry: json.dumps(entry))
-    return inventory
-
-
-def _load_auth_store(path: Path, *, missing_ok: bool = False) -> dict[str, Any]:
-    if not path.is_file():
-        if missing_ok:
-            return {"version": 1, "providers": {}, "credential_pool": {}}
-        raise ValueError(f"auth store not found: {path}")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError as error:
-        raise ValueError(f"{path}: invalid auth store JSON") from error
-    if not isinstance(data, dict):
-        raise ValueError(f"{path}: auth store must be an object")
-    for field in ("providers", "credential_pool"):
-        value = data.get(field, {})
-        if not isinstance(value, dict):
-            raise ValueError(f"{path}: {field} must be an object")
-        data[field] = value
-    return data
-
-
-def _copy_auth_providers(
-    source: dict[str, Any], target: dict[str, Any], providers: list[str]
-) -> list[str]:
-    source_states = source["providers"]
-    source_pool = source["credential_pool"]
-    target_states = target["providers"]
-    target_pool = target["credential_pool"]
-    copied: list[str] = []
-    for provider in dict.fromkeys(providers):
-        if provider not in source_states and provider not in source_pool:
-            raise ValueError(f"source auth store has no provider: {provider}")
-        if provider in source_states:
-            target_states[provider] = copy.deepcopy(source_states[provider])
-        else:
-            target_states.pop(provider, None)
-        if provider in source_pool:
-            target_pool[provider] = copy.deepcopy(source_pool[provider])
-        else:
-            target_pool.pop(provider, None)
-        copied.append(provider)
-    return copied
-
-
-def _providers_contain_refresh_tokens(
-    source: dict[str, Any], providers: list[str]
-) -> bool:
-    for provider in providers:
-        for section in (source["providers"], source["credential_pool"]):
-            if provider in section and _contains_refresh_token(section[provider]):
-                return True
-    return False
-
-
-def _contains_refresh_token(value: object) -> bool:
-    if isinstance(value, dict):
-        return "refresh_token" in value or any(
-            _contains_refresh_token(item) for item in value.values()
-        )
-    if isinstance(value, list):
-        return any(_contains_refresh_token(item) for item in value)
-    return False
-
-
-def _shared_auth_path(settings: Settings) -> Path:
-    if settings.profiles_dir.name != "profiles":
-        raise ValueError(
-            "shared auth requires profiles_dir to be named 'profiles' so Hermes "
-            "can resolve its root fallback"
-        )
-    return settings.profiles_dir.parent / "auth.json"
-
-
-@contextmanager
-def _auth_locks(*stores: Path):
-    """Use Hermes-compatible advisory locks for a multi-store sync."""
-    lock_paths: list[Path] = []
-    seen: set[Path] = set()
-    for store in stores:
-        path = store.with_suffix(".lock").resolve(strict=False)
-        if path not in seen:
-            seen.add(path)
-            lock_paths.append(path)
-    with ExitStack() as stack:
-        for path in lock_paths:
-            stack.enter_context(_auth_lock(path))
-        yield
-
-
-@contextmanager
-def _auth_lock(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as file:
-        deadline = time.monotonic() + 15
-        while True:
-            try:
-                fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except (BlockingIOError, OSError, PermissionError) as error:
-                if time.monotonic() >= deadline:
-                    raise ValueError(
-                        f"timed out waiting for auth lock: {path}"
-                    ) from error
-                time.sleep(0.05)
-        try:
-            yield
-        finally:
-            fcntl.flock(file.fileno(), fcntl.LOCK_UN)

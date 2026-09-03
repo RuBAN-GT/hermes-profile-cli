@@ -7,6 +7,7 @@ from textual.widgets import Button, Input, Label, ListView, LoadingIndicator, St
 from hermes_profile.models import LocalLocation, Settings
 from hermes_profile.paths import initialize_settings, upsert_local_location
 from hermes_profile.profiles import create_profile
+from hermes_profile.themes import DEFAULT_THEME, THEME_NAMES, next_theme
 from hermes_profile.transport import LocalTransport
 from hermes_profile.tui.app import (
     ProfileApp,
@@ -17,6 +18,7 @@ from hermes_profile.tui.app import (
 from hermes_profile.tui.help import HelpScreen
 from hermes_profile.tui.location_home import LocationHomeScreen
 from hermes_profile.tui.location_setup import AuthSyncScreen
+from hermes_profile.tui.menus import AuthHubScreen, MoreActionsScreen
 from hermes_profile.tui.setup import LocalSetupScreen, SetupApp
 from hermes_profile.tui.ssh_setup import SshSetupScreen
 
@@ -304,7 +306,7 @@ def test_tui_help_opens_guide(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_tui_opens_auth_sync_for_the_selected_profile(tmp_path: Path) -> None:
+def test_tui_opens_auth_hub_then_sync(tmp_path: Path) -> None:
     root = tmp_path / "managed"
     settings = Settings(root, root / "profiles", root / "fragments")
     create_profile(settings, "tyrion")
@@ -318,10 +320,70 @@ def test_tui_opens_auth_sync_for_the_selected_profile(tmp_path: Path) -> None:
             app.selected_profile = "tyrion"
             app.action_auth()
             await pilot.pause()
+            assert isinstance(app.screen, AuthHubScreen)
+            app.screen.dismiss("sync")
+            await pilot.pause()
             assert isinstance(app.screen, AuthSyncScreen)
             assert app.screen.query_one("#auth-providers", Input)
 
     asyncio.run(run())
+
+
+def test_tui_more_actions_and_theme_cycle(tmp_path: Path) -> None:
+    root = tmp_path / "managed"
+    settings = Settings(root, root / "profiles", root / "fragments", animations=False)
+    create_profile(settings, "tyrion")
+    app = ProfileApp(settings, tmp_path / "config.yaml")
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app.theme == DEFAULT_THEME
+            assert set(app.available_themes) == set(THEME_NAMES)
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            assert app.theme == next_theme(DEFAULT_THEME)
+            await pilot.press("enter")
+            await pilot.pause()
+            app.selected_profile = "tyrion"
+            app.action_more()
+            await pilot.pause()
+            assert isinstance(app.screen, MoreActionsScreen)
+
+    asyncio.run(run())
+
+
+def test_tui_cycles_language_en_ru(tmp_path: Path) -> None:
+    from hermes_profile.i18n import language
+
+    root = tmp_path / "managed"
+    settings = Settings(root, root / "profiles", root / "fragments", animations=False)
+    app = ProfileApp(settings, tmp_path / "config.yaml")
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert language() == "en"
+            title = str(app.screen.query_one("#location-title", Label).content)
+            assert "Where do you want to work?" in title
+            await pilot.press("ctrl+l")
+            await pilot.pause()
+            assert language() == "ru"
+            title = str(app.screen.query_one("#location-title", Label).content)
+            assert "Где работать?" in title
+
+    asyncio.run(run())
+
+
+def test_help_and_setup_css_use_theme_variables() -> None:
+    from hermes_profile.tui.help import HelpScreen
+    from hermes_profile.tui.setup import SETUP_CSS
+
+    assert "#282a36" not in HelpScreen.CSS
+    assert "#bd93f9" not in HelpScreen.CSS
+    assert "$primary" in HelpScreen.CSS
+    assert "#282a36" not in SETUP_CSS
+    assert "$background" in SETUP_CSS
 
 
 def test_ssh_setup_runs_init_in_a_worker(tmp_path: Path, monkeypatch: object) -> None:

@@ -26,10 +26,14 @@ def load_profile(settings: Settings, name: str) -> Profile:
     data = yaml.safe_load(path.read_text()) or {}
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a mapping")
+    auth = data.get("auth")
+    if auth is not None and (not isinstance(auth, str) or not auth):
+        raise ValueError(f"{path}: auth must be a map key string")
     return Profile(
         name=name,
         config_fragments=_references(data.get("config", []), path, "config"),
         env_fragments=_references(data.get("env", []), path, "env"),
+        auth=auth,
     )
 
 

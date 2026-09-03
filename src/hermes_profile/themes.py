@@ -49,3 +49,29 @@ THEMES = (
 )
 
 THEME_NAMES = frozenset(theme.name for theme in THEMES)
+DEFAULT_THEME = "hermes-dracula"
+
+
+def apply_hermes_themes(app: object, preferred: str | None = None) -> str:
+    """Register only Hermes themes so the palette cannot pick builtin colors."""
+    from textual.app import App
+
+    if not isinstance(app, App):
+        raise TypeError("apply_hermes_themes requires a Textual App")
+    for theme in THEMES:
+        app.register_theme(theme)
+    name = preferred if preferred in THEME_NAMES else DEFAULT_THEME
+    app.theme = name
+    for registered in list(app.available_themes):
+        if registered not in THEME_NAMES:
+            app.unregister_theme(registered)
+    return name
+
+
+def next_theme(current: str) -> str:
+    names = [theme.name for theme in THEMES]
+    try:
+        index = names.index(current)
+    except ValueError:
+        return names[0]
+    return names[(index + 1) % len(names)]

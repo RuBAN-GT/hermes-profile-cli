@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from hermes_profile.i18n import LANGUAGE_NAMES
 from hermes_profile.models import Host, LocalLocation, Settings
 from hermes_profile.themes import THEME_NAMES
 
@@ -68,7 +69,11 @@ def _settings_data(settings: Settings) -> dict[str, object]:
         "managed_dir": str(settings.managed_dir),
         "profiles_dir": str(settings.profiles_dir),
         "fragments_dir": str(settings.fragments_dir),
-        "ui": {"animations": settings.animations, "theme": settings.theme},
+        "ui": {
+            "animations": settings.animations,
+            "theme": settings.theme,
+            "language": settings.language,
+        },
     }
     if settings.hosts:
         data["hosts"] = {
@@ -137,12 +142,16 @@ def load_settings(value: str | None) -> Settings:
     animations = ui.get("animations", True)
     if not isinstance(animations, bool):
         raise ValueError("ui.animations must be a boolean")
+    language = ui.get("language", "en")
+    if not isinstance(language, str) or language not in LANGUAGE_NAMES:
+        raise ValueError("ui.language must be en or ru")
     return Settings(
         managed_dir=managed_dir,
         profiles_dir=profiles_dir,
         fragments_dir=fragments_dir,
         animations=animations,
         theme=theme,
+        language=language,
         hosts=hosts,
         local_locations=local_locations,
     )
@@ -223,6 +232,21 @@ def set_theme(path: Path, theme: str) -> None:
     if not isinstance(ui, dict):
         raise ValueError(f"{path}: ui must be a mapping")
     ui["theme"] = theme
+    write_private(path, yaml.safe_dump(data, sort_keys=False))
+
+
+def save_language(path: Path, language: str) -> None:
+    if language not in LANGUAGE_NAMES:
+        return
+    if not path.is_file():
+        return
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a mapping")
+    ui = data.setdefault("ui", {})
+    if not isinstance(ui, dict):
+        raise ValueError(f"{path}: ui must be a mapping")
+    ui["language"] = language
     write_private(path, yaml.safe_dump(data, sort_keys=False))
 
 

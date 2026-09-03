@@ -9,8 +9,10 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Input, Label, LoadingIndicator
 from textual.worker import Worker, WorkerState
 
+from hermes_profile.i18n import next_language, set_language, t
 from hermes_profile.models import Host
 from hermes_profile.paths import derived_child, initialize_settings, upsert_host
+from hermes_profile.themes import apply_hermes_themes, next_theme
 from hermes_profile.transport import (
     DEFAULT_REMOTE_BINARY,
     INSTALL_TIMEOUT_SECONDS,
@@ -24,41 +26,44 @@ from hermes_profile.tui.help import HelpScreen
 DEFAULT_LOCAL_MANAGED = Path("~/.local/share/hermes-profile/managed").expanduser()
 
 SETUP_CSS = """
-Screen { align: center middle; background: #282a36; color: #f8f8f2; }
-Footer { background: #44475a; color: #f8f8f2; }
-FooterKey { background: #6272a4; color: #f8f8f2; }
+Screen { align: center middle; background: $background; color: $foreground; }
 #setup {
     width: 84;
     height: auto;
     padding: 2;
-    border: tall #bd93f9;
-    background: #21222c;
+    border: tall $primary;
+    background: $surface;
 }
-#setup-title { text-style: bold; }
-#setup-subtitle { color: #6272a4; margin-bottom: 1; }
+#setup-title { text-style: bold; color: $text-primary; }
+#setup-subtitle { color: $text-muted; margin-bottom: 1; }
 #setup-fields { height: auto; max-height: 22; }
-#setup-hint, .hint { color: #6272a4; }
-#error { color: #ff5555; height: 3; }
+#setup-hint, .hint { color: $text-muted; }
+#error { color: $text-error; height: 3; }
 #setup-loading { height: 1; margin: 1 0; }
-Input { margin: 1 0; border: tall #6272a4; background: #282a36; color: #f8f8f2; }
-Input:focus { border: tall #8be9fd; }
+Input {
+    margin: 1 0;
+    border: tall $secondary;
+    background: $background;
+    color: $foreground;
+}
+Input:focus { border: tall $accent; }
 Button {
     margin-top: 1;
-    border: tall #6272a4;
-    background: #44475a;
-    color: #f8f8f2;
+    border: tall $secondary;
+    background: $panel;
+    color: $foreground;
     text-style: bold;
     width: 100%;
 }
-Button:hover { background: #bd93f9; color: #282a36; }
-#choose-local, #local { border: tall #50fa7b; color: #50fa7b; }
-#choose-ssh, #ssh { border: tall #8be9fd; color: #8be9fd; }
-#ssh-clone { border: tall #ff79c6; color: #ff79c6; }
-#back-setup { border: tall #6272a4; color: #f8f8f2; }
-#choose-local:hover, #local:hover { background: #50fa7b; color: #282a36; }
-#choose-ssh:hover, #ssh:hover { background: #8be9fd; color: #282a36; }
-#ssh-clone:hover { background: #ff79c6; color: #282a36; }
-#back-setup:hover { background: #6272a4; color: #f8f8f2; }
+Button:hover { background: $primary; color: $text; }
+#choose-local, #local { border: tall $success; color: $text-success; }
+#choose-ssh, #ssh { border: tall $accent; color: $text-accent; }
+#ssh-clone { border: tall $warning; color: $text-warning; }
+#back-setup { border: tall $secondary; color: $foreground; }
+#choose-local:hover, #local:hover { background: $success; color: $text; }
+#choose-ssh:hover, #ssh:hover { background: $accent; color: $text; }
+#ssh-clone:hover { background: $warning; color: $text; }
+#back-setup:hover { background: $secondary; color: $text; }
 """
 
 
@@ -69,6 +74,8 @@ class SetupApp(App[Path | None]):
     TITLE = "Hermes Profile Setup"
     BINDINGS = [
         Binding("q", "quit", "Quit"),
+        Binding("ctrl+t", "cycle_theme", "Theme"),
+        Binding("ctrl+l", "cycle_language", "Lang"),
         Binding("question_mark", "help", "Help", key_display="?"),
         Binding("f1", "help", "Help", show=False),
     ]
@@ -77,22 +84,28 @@ class SetupApp(App[Path | None]):
         super().__init__()
         self.config = config
 
+    def on_mount(self) -> None:
+        apply_hermes_themes(self)
+
+    def action_cycle_theme(self) -> None:
+        self.theme = next_theme(self.theme)
+
+    def action_cycle_language(self) -> None:
+        set_language(next_language())
+        self.query_one("#setup-title", Label).update(t("setup_title"))
+        self.query_one("#setup-subtitle", Label).update(t("setup_subtitle"))
+        self.query_one("#choose-local", Button).label = t("this_computer")
+        self.query_one("#choose-ssh", Button).label = t("another_ssh")
+
     def compose(self) -> ComposeResult:
         with Vertical(id="setup"):
-            yield Label("Set up Hermes Profile Manager", id="setup-title")
-            yield Label("Where should profiles live?", id="setup-subtitle")
-            yield Label(
-                "This computer: profiles, fragments, and manager state stay here.",
-                classes="hint",
-            )
-            yield Button("This computer", id="choose-local")
-            yield Label(
-                "SSH: manage another host with your existing keys. "
-                "Passwords are not stored.",
-                classes="hint",
-            )
-            yield Button("Another machine over SSH", id="choose-ssh")
-            yield Label("Press ? for full help.", classes="hint")
+            yield Label(t("setup_title"), id="setup-title")
+            yield Label(t("setup_subtitle"), id="setup-subtitle")
+            yield Label(t("setup_local_hint"), classes="hint")
+            yield Button(t("this_computer"), id="choose-local")
+            yield Label(t("setup_ssh_hint"), classes="hint")
+            yield Button(t("another_ssh"), id="choose-ssh")
+            yield Label(t("press_help"), classes="hint")
         yield Footer()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

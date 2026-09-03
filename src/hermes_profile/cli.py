@@ -8,8 +8,15 @@ from typing import Any
 import yaml
 
 from hermes_profile import __version__
+from hermes_profile.auth_adapters import (
+    export_auth,
+    import_auth,
+    list_sources,
+    push_auth,
+)
+from hermes_profile.auth_map import auth_map_status, bind_profile_auth
 from hermes_profile.backups import create_backup, list_backups, restore_backup
-from hermes_profile.helptext import HELP_TEXT
+from hermes_profile.helptext import help_text
 from hermes_profile.models import Profile, Settings
 from hermes_profile.paths import (
     config_path,
@@ -36,6 +43,8 @@ from hermes_profile.service import (
 )
 from hermes_profile.transport import SshTransport, remote_arguments
 
+LOCAL_AUTH_COMMANDS = {"import", "export", "push", "sources"}
+
 
 def main(argv: list[str] | None = None) -> None:
     original = list(sys.argv[1:] if argv is None else argv)
@@ -43,7 +52,7 @@ def main(argv: list[str] | None = None) -> None:
     arguments = parser.parse_args(original)
     try:
         if arguments.command == "help":
-            print(HELP_TEXT)
+            print(help_text())
             return
         if arguments.command == "self-update":
             _emit(self_update(), arguments.format)
@@ -149,6 +158,39 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow copying OAuth refresh tokens into the shared fallback",
     )
+    auth_subcommands.add_parser(
+        "map-status", help="inspect auth-map bindings without exposing secrets"
+    )
+    bind_auth = auth_subcommands.add_parser(
+        "bind", help="attach mapped identity stores to a profile"
+    )
+    bind_auth.add_argument("name")
+    bind_auth.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an identity pointer when both stores already exist",
+    )
+    sources = auth_subcommands.add_parser(
+        "sources", help="list adapter credentials without exposing secrets"
+    )
+    sources.add_argument("--from", dest="source", required=True)
+    sources.add_argument("--path", type=lambda value: Path(value).expanduser())
+    import_auth_cmd = auth_subcommands.add_parser(
+        "import", help="import credentials into an identity or shared store"
+    )
+    _transfer_auth_args(import_auth_cmd, source=True)
+    export_auth_cmd = auth_subcommands.add_parser(
+        "export", help="export an identity or shared store through an adapter"
+    )
+    _transfer_auth_args(export_auth_cmd, source=False)
+    push_auth_cmd = auth_subcommands.add_parser(
+        "push", help="copy an identity or shared provider slice to an SSH host"
+    )
+    push_auth_cmd.add_argument("--host", dest="push_host", required=True)
+    push_auth_cmd.add_argument("--identity")
+    push_auth_cmd.add_argument("--shared", action="store_true")
+    push_auth_cmd.add_argument("--provider", action="append", default=[])
+    push_auth_cmd.add_argument("--allow-oauth", action="store_true")
     backup = commands.add_parser("backup", help="snapshot or restore managed setup")
     backup_subcommands = backup.add_subparsers(dest="backup_command", required=True)
     backup_subcommands.add_parser("create")
@@ -193,6 +235,16 @@ def _dispatch(
 
         ProfileApp(settings, config).run()
         return None
+    if (
+        arguments.command == "auth"
+        and getattr(arguments, "auth_command", None) in LOCAL_AUTH_COMMANDS
+    ):
+        if arguments.host:
+            raise ValueError(
+                "auth import/export/push/sources run locally; "
+                "use auth push --host ALIAS to copy stores"
+            )
+        return _run_local(arguments, settings)
     if arguments.host:
         transport = SshTransport(_host(settings, arguments.host))
         return transport.run(remote_arguments(original))
@@ -234,6 +286,43 @@ def _run_local(arguments: argparse.Namespace, settings: Settings) -> dict[str, A
                 settings,
                 arguments.source,
                 arguments.provider,
+                allow_oauth=arguments.allow_oauth,
+            )
+        if arguments.auth_command == "map-status":
+            return auth_map_status(settings)
+        if arguments.auth_command == "bind":
+            return bind_profile_auth(settings, arguments.name, force=arguments.force)
+        if arguments.auth_command == "sources":
+            return list_sources(arguments.source, arguments.path)
+        if arguments.auth_command == "import":
+            return import_auth(
+                settings,
+                source=arguments.source,
+                identity=arguments.identity,
+                provider=arguments.provider,
+                source_profile=arguments.source_profile,
+                path=arguments.path,
+                shared=arguments.shared,
+                allow_oauth=arguments.allow_oauth,
+            )
+        if arguments.auth_command == "export":
+            return export_auth(
+                settings,
+                destination=arguments.destination,
+                identity=arguments.identity,
+                provider=arguments.provider,
+                source_profile=arguments.source_profile,
+                path=arguments.path,
+                shared=arguments.shared,
+                allow_oauth=arguments.allow_oauth,
+            )
+        if arguments.auth_command == "push":
+            return push_auth(
+                settings,
+                _host(settings, arguments.push_host),
+                identity=arguments.identity,
+                providers=arguments.provider,
+                shared=arguments.shared,
                 allow_oauth=arguments.allow_oauth,
             )
         raise ValueError(f"unsupported auth command: {arguments.auth_command}")
@@ -290,6 +379,27 @@ def _emit(result: dict[str, Any], output: str) -> None:
         ):
             names = result[key]
             print(f"env {label}: {', '.join(names) if names else 'none'}")
+        bindings = result.get("bindings")
+        if isinstance(bindings, list):
+            if not bindings:
+                print("auth bindings: none")
+            for item in bindings:
+                if not isinstance(item, dict):
+                    continue
+                target = item.get("target")
+                provider = item.get("provider")
+                extra = []
+                if item.get("missing") or (
+                    isinstance(result.get("missing"), list)
+                    and target in result["missing"]
+                ):
+                    extra.append("missing")
+                if item.get("shadowed"):
+                    extra.append("shadows shared")
+                if item.get("bound"):
+                    extra.append("bound")
+                suffix = f" ({', '.join(extra)})" if extra else ""
+                print(f"auth {provider}: {target}{suffix}")
     else:
         print(yaml.safe_dump(result, allow_unicode=False, sort_keys=False), end="")
 
@@ -304,13 +414,30 @@ def _update(
         name=name,
         config_fragments=profile.config_fragments + tuple(config),
         env_fragments=profile.env_fragments + tuple(environment),
+        auth=profile.auth,
     )
     path = settings.profiles_dir / name / "profile.yaml"
     write_private(path, yaml.safe_dump(_profile_data(updated), sort_keys=False))
 
 
-def _profile_data(profile: Profile) -> dict[str, list[str]]:
-    return {
+def _profile_data(profile: Profile) -> dict[str, object]:
+    data: dict[str, object] = {
         "config": list(profile.config_fragments),
         "env": list(profile.env_fragments),
     }
+    if profile.auth:
+        data["auth"] = profile.auth
+    return data
+
+
+def _transfer_auth_args(parser: argparse.ArgumentParser, *, source: bool) -> None:
+    if source:
+        parser.add_argument("--from", dest="source", required=True)
+    else:
+        parser.add_argument("--to", dest="destination", required=True)
+    parser.add_argument("--identity")
+    parser.add_argument("--provider")
+    parser.add_argument("--source-profile")
+    parser.add_argument("--path", type=lambda value: Path(value).expanduser())
+    parser.add_argument("--shared", action="store_true")
+    parser.add_argument("--allow-oauth", action="store_true")

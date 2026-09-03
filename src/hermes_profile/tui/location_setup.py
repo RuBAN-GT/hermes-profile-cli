@@ -400,6 +400,4 @@ class AuthSyncScreen(ModalScreen[tuple[list[str], bool] | None]):
                 "Enter at least one provider ID."
             )
             return
-        self.dismiss(
-            (providers, self.query_one("#allow-oauth", Checkbox).value)
-        )
+        self.dismiss((providers, self.query_one("#allow-oauth", Checkbox).value))
