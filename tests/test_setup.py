@@ -4,10 +4,12 @@ import pytest
 
 from hermes_profile.models import Host, LocalLocation
 from hermes_profile.paths import (
+    config_path,
     delete_location,
     derived_child,
     initialize_settings,
     load_settings,
+    update_local_settings,
     upsert_host,
     upsert_local_location,
     write_private,
@@ -26,6 +28,14 @@ def test_initialize_creates_config_and_operational_layout(tmp_path: Path) -> Non
     assert settings.fragments_dir.is_dir()
     assert config.stat().st_mode & 0o777 == 0o600
     assert managed.stat().st_mode & 0o777 == 0o700
+
+
+def test_config_path_uses_config_dir_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HERMES_PROFILE_CONFIG_DIR", str(tmp_path / "manager"))
+
+    assert config_path(None) == tmp_path / "manager" / "config.yaml"
 
 
 def test_create_profile_uses_private_directories(tmp_path: Path) -> None:
@@ -163,6 +173,31 @@ def test_upsert_local_location_preserves_primary_location(tmp_path: Path) -> Non
 
     loaded = load_settings(str(config))
     assert loaded.managed_dir == tmp_path / "managed"
+    assert loaded.local_locations == {"lab": location}
+
+
+def test_update_local_settings_preserves_configured_locations(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    initialize_settings(config, tmp_path / "managed")
+    location = LocalLocation(
+        alias="lab",
+        managed_dir=tmp_path / "lab",
+        profiles_dir=tmp_path / "lab" / "profiles",
+        fragments_dir=tmp_path / "lab" / "fragments",
+    )
+    upsert_local_location(config, location)
+
+    update_local_settings(
+        config,
+        tmp_path / "infra" / "managed",
+        tmp_path / "infra" / "profiles",
+        tmp_path / "infra" / "managed" / "fragments",
+    )
+
+    loaded = load_settings(str(config))
+    assert loaded.managed_dir == tmp_path / "infra" / "managed"
+    assert loaded.profiles_dir == tmp_path / "infra" / "profiles"
+    assert loaded.fragments_dir == tmp_path / "infra" / "managed" / "fragments"
     assert loaded.local_locations == {"lab": location}
 
 

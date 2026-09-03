@@ -18,7 +18,7 @@ from textual.widgets import (
 )
 from textual.worker import Worker, WorkerState
 
-from hermes_profile.models import Settings
+from hermes_profile.models import LocalLocation, Settings
 from hermes_profile.paths import delete_location, load_settings, set_theme
 from hermes_profile.profiles import list_profiles
 from hermes_profile.themes import THEMES
@@ -490,11 +490,19 @@ class ProfileApp(App[None]):
 
     def edit_location(self, identifier: str, callback: Any) -> None:
         if identifier == "local":
-            self.notify(
-                "The default local location is edited in config.yaml.",
-                severity="warning",
+            self.push_screen(
+                LocalLocationScreen(
+                    self.config,
+                    LocalLocation(
+                        "local",
+                        self.settings.managed_dir,
+                        self.settings.profiles_dir,
+                        self.settings.fragments_dir,
+                    ),
+                    primary=True,
+                ),
+                lambda saved: self._location_saved_then(saved, callback),
             )
-            callback(False)
             return
         kind, alias = identifier.split("--", 1)
         if kind == "ssh":

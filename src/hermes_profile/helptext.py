@@ -12,6 +12,7 @@ Paths
 
 First-run setup
   Choose this computer or another machine over SSH.
+  Set HERMES_PROFILE_CONFIG_DIR or pass --config to choose the manager config.
   Local setup lets you set config, managed, profiles, and fragments.
   Profiles/fragments follow the managed directory until you edit them.
   SSH uses your existing agent and keys. Passwords are not stored.
@@ -25,7 +26,7 @@ TUI keys
   ? / F1          Help
   enter           Open the selected location
   a               Add a location (locations screen) or Apply (workspace)
-  e               Edit a location
+  e               Edit a location, including the primary local workspace
   d               Remove a location record (files stay on disk)
   i               Create remote dirs/config if missing
   n               New profile

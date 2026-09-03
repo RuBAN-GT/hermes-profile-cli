@@ -12,9 +12,11 @@ PROFILE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
 def config_path(value: str | None) -> Path:
-    configured = value or os.environ.get("HERMES_PROFILE_CONFIG")
-    if configured:
-        return Path(configured).expanduser()
+    if value:
+        return Path(value).expanduser()
+    configured_dir = os.environ.get("HERMES_PROFILE_CONFIG_DIR")
+    if configured_dir:
+        return Path(configured_dir).expanduser() / "config.yaml"
     return Path("~/.config/hermes-profile/config.yaml").expanduser()
 
 
@@ -172,6 +174,25 @@ def upsert_local_location(path: Path, location: LocalLocation) -> None:
         raise ValueError(f"{path}: local_locations must be a mapping")
     locations[location.alias] = _local_location_data(location)
     _load_local_locations(locations)
+    write_private(path, yaml.safe_dump(data, sort_keys=False))
+
+
+def update_local_settings(
+    path: Path, managed_dir: Path, profiles_dir: Path, fragments_dir: Path
+) -> None:
+    """Update the primary local workspace without changing other locations."""
+    if not path.is_file():
+        raise ValueError(f"manager config not found: {path}")
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a mapping")
+    data.update(
+        {
+            "managed_dir": str(_absolute_dir(managed_dir, "managed_dir")),
+            "profiles_dir": str(_absolute_dir(profiles_dir, "profiles_dir")),
+            "fragments_dir": str(_absolute_dir(fragments_dir, "fragments_dir")),
+        }
+    )
     write_private(path, yaml.safe_dump(data, sort_keys=False))
 
 

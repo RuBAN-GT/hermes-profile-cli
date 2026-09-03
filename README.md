@@ -81,7 +81,15 @@ By default, the manager configuration is
 `~/.config/hermes-profile/config.yaml`, and `managed_dir` is
 `~/.local/share/hermes-profile/managed`. You can also copy
 `config.example.yaml` outside this repository and pass it with `--config` or
-`HERMES_PROFILE_CONFIG`. Paths in the example are examples only.
+`HERMES_PROFILE_CONFIG_DIR`:
+
+```bash
+export HERMES_PROFILE_CONFIG_DIR=/srv/hermes/managed
+hermes-profile tui
+```
+
+Use `e` on the `local` location in the TUI to edit its managed, profiles, and
+fragments paths. Paths in the example are examples only.
 
 ## How It Works
 

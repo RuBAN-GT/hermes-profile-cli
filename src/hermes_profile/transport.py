@@ -33,6 +33,9 @@ class LocalTransport:
 
     def action(self, name: str, action: str) -> dict[str, Any]:
         if action == "render":
+            directory = self.settings.profiles_dir / name
+            if not (directory / "profile.yaml").is_file():
+                return _existing_profile_preview(directory, name)
             config, environment = render_profile(self.settings, name)
             return {"config": config, "environment_count": len(environment)}
         if action == "reconcile":
@@ -293,7 +296,6 @@ fi
             raw = output.split("__ENV_COUNT__", 1)[1].splitlines()[0].strip()
             env_count = int(raw or "0")
         return {"config": config, "environment_count": env_count}
-
     def _ssh(self, remote_arguments: list[str]) -> subprocess.CompletedProcess[str]:
         return self._ssh_shell(shlex.join(remote_arguments))
 
@@ -341,6 +343,28 @@ fi
                 ssh_error_message(self.host.alias, self.host.remote_binary, detail)
             )
         return completed
+
+
+def _existing_profile_preview(directory: Path, name: str) -> dict[str, Any]:
+    """Preview a Hermes-owned profile that has no declarative profile.yaml."""
+    _validate_profile_name(name)
+    config_path = directory / "config.yaml"
+    if not config_path.is_file():
+        raise ValueError(f"profile does not exist: {name}")
+    config = yaml.safe_load(config_path.read_text()) or {}
+    if not isinstance(config, dict):
+        raise ValueError(f"{name}: config.yaml must be a mapping")
+    env_path = directory / ".env"
+    env_count = (
+        sum(
+            1
+            for line in env_path.read_text().splitlines()
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", line)
+        )
+        if env_path.is_file()
+        else 0
+    )
+    return {"config": config, "environment_count": env_count}
 
 
 def parse_ssh_target(value: str) -> tuple[str | None, str, int | None]:

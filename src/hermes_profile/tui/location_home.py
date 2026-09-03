@@ -150,8 +150,6 @@ class LocationHomeScreen(Screen[None]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "init" and not self.selected.startswith("ssh--"):
             return False
-        if action == "edit" and self.selected == "local":
-            return False
         return True
 
     def action_help(self) -> None:
@@ -194,7 +192,7 @@ class LocationHomeScreen(Screen[None]):
         self.query_one("#selected-location", Label).update(title)
         self.query_one("#selected-location-kind", Label).update(kind)
         self.query_one("#selected-location-detail", Static).update(detail)
-        primary = self.selected == "local"
-        self.query_one("#delete-location-home", Button).disabled = primary
-        self.query_one("#edit-location-home", Button).disabled = primary
+        delete = self.query_one("#delete-location-home", Button)
+        delete.disabled = self.selected == "local"
+        self.query_one("#edit-location-home", Button).disabled = False
         self.refresh_bindings()

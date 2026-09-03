@@ -50,6 +50,19 @@ def test_local_transport_preview_has_no_environment_values(tmp_path: Path) -> No
     assert preview == {"config": {}, "environment_count": 1}
 
 
+def test_local_transport_previews_existing_hermes_profile(tmp_path: Path) -> None:
+    root = tmp_path / "managed"
+    settings = Settings(root, tmp_path / "profiles", root / "fragments")
+    profile = settings.profiles_dir / "tyrion"
+    profile.mkdir(parents=True)
+    (profile / "config.yaml").write_text("model:\n  name: base\n")
+    (profile / ".env").write_text("TOKEN=redacted\n# ignored\n")
+
+    preview = LocalTransport(settings).action("tyrion", "render")
+
+    assert preview == {"config": {"model": {"name": "base"}}, "environment_count": 1}
+
+
 def test_tui_lists_additional_local_location(tmp_path: Path) -> None:
     root = tmp_path / "managed"
     location = LocalLocation(
@@ -115,6 +128,27 @@ def test_tui_hides_workspace_keys_on_location_home(tmp_path: Path) -> None:
             assert app.check_action("init_remote", ()) is False
 
     asyncio.run(run())
+
+
+def test_tui_allows_editing_primary_local_workspace(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    settings = initialize_settings(config, tmp_path / "managed")
+    app = ProfileApp(settings, config)
+    updated = tmp_path / "infra" / "managed"
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            app.screen.query_one("#local-managed-dir", Input).value = str(updated)
+            await pilot.pause()
+            await pilot.click("#save-local")
+            await pilot.pause()
+
+    asyncio.run(run())
+    assert app.settings.managed_dir == updated
+    assert app.settings.profiles_dir == updated / "profiles"
 
 
 def test_tui_load_error_replaces_loading_copy(tmp_path: Path) -> None:

@@ -1,5 +1,5 @@
 # Copy outside this repository and pass the resulting path with --config,
-# or set HERMES_PROFILE_CONFIG to it.
+# or set HERMES_PROFILE_CONFIG_DIR to its directory.
 managed_dir: /opt/hermes/managed
 
 # These default to <managed_dir>/profiles and <managed_dir>/fragments when omitted.

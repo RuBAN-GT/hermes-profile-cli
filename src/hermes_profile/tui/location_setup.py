@@ -10,6 +10,7 @@ from hermes_profile.paths import (
     PROFILE_NAME,
     _absolute_dir,
     derived_child,
+    update_local_settings,
     upsert_local_location,
 )
 
@@ -156,32 +157,48 @@ class LocalLocationScreen(ModalScreen[bool]):
     #save-local { border: round $success; color: $success; }
     """
 
-    def __init__(self, config: Path, location: LocalLocation | None = None) -> None:
+    def __init__(
+        self,
+        config: Path,
+        location: LocalLocation | None = None,
+        *,
+        primary: bool = False,
+    ) -> None:
         super().__init__()
         self.config = config
         self.location = location
+        self.primary = primary
         self._managed = location.managed_dir if location else Path()
 
     def compose(self) -> ComposeResult:
         editing = self.location is not None
         with Vertical(id="local-setup"):
             yield Label(
-                "Edit local folder" if editing else "Add a local folder",
+                "Edit primary local workspace"
+                if self.primary
+                else "Edit local folder"
+                if editing
+                else "Add a local folder",
                 id="local-title",
             )
             yield Label(
-                "A separate profile root on this machine. Alias is the TUI name.",
+                "The default profile root on this machine."
+                if self.primary
+                else "A separate profile root on this machine. Alias is the TUI name.",
                 id="local-subtitle",
             )
             with VerticalScroll(id="local-fields"):
-                yield Label("Alias")
-                yield Label("Lowercase letters, digits, and hyphens.", classes="hint")
-                yield Input(
-                    value=self.location.alias if self.location else "",
-                    placeholder="Alias, e.g. laptop",
-                    id="local-alias",
-                    disabled=editing,
-                )
+                if not self.primary:
+                    yield Label("Alias")
+                    yield Label(
+                        "Lowercase letters, digits, and hyphens.", classes="hint"
+                    )
+                    yield Input(
+                        value=self.location.alias if self.location else "",
+                        placeholder="Alias, e.g. laptop",
+                        id="local-alias",
+                        disabled=editing,
+                    )
                 yield Label("Managed directory")
                 yield Label(
                     "Operational root. Profiles and fragments follow this path "
@@ -241,7 +258,11 @@ class LocalLocationScreen(ModalScreen[bool]):
             self.dismiss(False)
             return
         try:
-            alias = self.query_one("#local-alias", Input).value.strip()
+            alias = (
+                "local"
+                if self.primary
+                else self.query_one("#local-alias", Input).value.strip()
+            )
             managed = self.query_one("#local-managed-dir", Input).value.strip()
             profiles = self.query_one("#local-profiles-dir", Input).value.strip()
             fragments = self.query_one("#local-fragments-dir", Input).value.strip()
@@ -262,20 +283,22 @@ class LocalLocationScreen(ModalScreen[bool]):
                 Path(fragments) if fragments else managed_dir / "fragments",
                 "fragments_dir",
             )
-            location = LocalLocation(
-                alias=alias,
-                managed_dir=managed_dir,
-                profiles_dir=profiles_dir,
-                fragments_dir=fragments_dir,
-            )
             for directory in (
-                location.managed_dir,
-                location.profiles_dir,
-                location.fragments_dir,
+                managed_dir,
+                profiles_dir,
+                fragments_dir,
             ):
                 directory.mkdir(parents=True, exist_ok=True)
                 directory.chmod(0o700)
-            upsert_local_location(self.config, location)
+            if self.primary:
+                update_local_settings(
+                    self.config, managed_dir, profiles_dir, fragments_dir
+                )
+            else:
+                upsert_local_location(
+                    self.config,
+                    LocalLocation(alias, managed_dir, profiles_dir, fragments_dir),
+                )
         except ValueError as error:
             self.query_one("#local-error", Label).update(str(error))
             return
