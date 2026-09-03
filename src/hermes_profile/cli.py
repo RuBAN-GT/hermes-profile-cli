@@ -23,13 +23,14 @@ from hermes_profile.paths import (
     initialize_settings,
     load_settings,
     upsert_host,
-    write_private,
 )
 from hermes_profile.profiles import (
     create_profile,
     delete_profile,
     list_profiles,
     load_profile,
+    save_profile,
+    share_profile_stack,
 )
 from hermes_profile.self_update import self_update
 from hermes_profile.service import (
@@ -122,6 +123,12 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("list", help="list profile names")
     create = commands.add_parser("create")
     create.add_argument("name")
+    create.add_argument("--add-config", action="append", default=[])
+    create.add_argument("--add-env", action="append", default=[])
+    create.add_argument(
+        "--share-from",
+        help="copy shared fragment refs from an existing profile; identity stays new",
+    )
     show = commands.add_parser("show")
     show.add_argument("name")
     profile_status = commands.add_parser("status")
@@ -140,6 +147,18 @@ def _parser() -> argparse.ArgumentParser:
     update.add_argument("name")
     update.add_argument("--add-config", action="append", default=[])
     update.add_argument("--add-env", action="append", default=[])
+    update.add_argument(
+        "--set-config",
+        action="append",
+        default=[],
+        help="replace config fragment refs instead of appending",
+    )
+    update.add_argument(
+        "--set-env",
+        action="append",
+        default=[],
+        help="replace env fragment refs instead of appending",
+    )
     delete = commands.add_parser("delete")
     delete.add_argument("name")
     delete.add_argument("--confirm", action="store_true")
@@ -203,6 +222,7 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("doctor", "init", "install"):
         command = ssh_subcommands.add_parser(name)
         command.add_argument("host")
+    commands.add_parser("mcp", help="run MCP server on stdio")
     commands.add_parser("tui", help="open the profile manager TUI")
     commands.add_parser("help", help="show command and TUI help")
     commands.add_parser(
@@ -228,6 +248,13 @@ def _dispatch(
             upsert_host(config, replace(host, remote_binary=result["binary"]))
             return result
         return transport.init()
+    if arguments.command == "mcp":
+        if arguments.host:
+            raise ValueError("mcp runs locally; pass location inside MCP tools")
+        from hermes_profile.mcp_server import run_server
+
+        run_server(config)
+        return None
     if arguments.command == "tui":
         if arguments.host:
             raise ValueError("select remote hosts from the local TUI")
@@ -255,7 +282,22 @@ def _run_local(arguments: argparse.Namespace, settings: Settings) -> dict[str, A
     if arguments.command == "list":
         return {"profiles": list_profiles(settings)}
     if arguments.command == "create":
-        return {"created": str(create_profile(settings, arguments.name))}
+        if arguments.share_from:
+            path = share_profile_stack(
+                settings,
+                arguments.share_from,
+                arguments.name,
+                extra_config=tuple(arguments.add_config),
+                extra_env=tuple(arguments.add_env),
+            )
+        else:
+            path = create_profile(
+                settings,
+                arguments.name,
+                config_fragments=tuple(arguments.add_config),
+                env_fragments=tuple(arguments.add_env),
+            )
+        return {"created": str(path)}
     if arguments.command == "show":
         return _profile_data(load_profile(settings, arguments.name))
     if arguments.command == "status":
@@ -271,7 +313,14 @@ def _run_local(arguments: argparse.Namespace, settings: Settings) -> dict[str, A
         apply(settings, arguments.name, arguments.discard_runtime)
         return {"ok": True, "applied": arguments.name}
     if arguments.command == "update":
-        _update(settings, arguments.name, arguments.add_config, arguments.add_env)
+        _update(
+            settings,
+            arguments.name,
+            arguments.add_config,
+            arguments.add_env,
+            arguments.set_config,
+            arguments.set_env,
+        )
         return {"ok": True, "updated": arguments.name}
     if arguments.command == "delete":
         if not arguments.confirm:
@@ -405,19 +454,29 @@ def _emit(result: dict[str, Any], output: str) -> None:
 
 
 def _update(
-    settings: Settings, name: str, config: list[str], environment: list[str]
+    settings: Settings,
+    name: str,
+    config: list[str],
+    environment: list[str],
+    set_config: list[str],
+    set_environment: list[str],
 ) -> None:
     profile = load_profile(settings, name)
-    if not config and not environment:
-        raise ValueError("update requires --add-config or --add-env")
-    updated = Profile(
-        name=name,
-        config_fragments=profile.config_fragments + tuple(config),
-        env_fragments=profile.env_fragments + tuple(environment),
-        auth=profile.auth,
+    if not config and not environment and not set_config and not set_environment:
+        raise ValueError(
+            "update requires --add-config, --add-env, --set-config, or --set-env"
+        )
+    config_fragments = tuple(set_config) if set_config else profile.config_fragments
+    env_fragments = tuple(set_environment) if set_environment else profile.env_fragments
+    save_profile(
+        settings,
+        Profile(
+            name=name,
+            config_fragments=config_fragments + tuple(config),
+            env_fragments=env_fragments + tuple(environment),
+            auth=profile.auth,
+        ),
     )
-    path = settings.profiles_dir / name / "profile.yaml"
-    write_private(path, yaml.safe_dump(_profile_data(updated), sort_keys=False))
 
 
 def _profile_data(profile: Profile) -> dict[str, object]:

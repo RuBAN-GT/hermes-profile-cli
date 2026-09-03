@@ -14,10 +14,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = [
+  "mcp>=2",
+]
 dev = [
   "pytest>=8.3",
   "ruff>=0.11",
   "pytest-textual-snapshot>=1.1",
+  "mcp>=2",
 ]
 
 [project.scripts]

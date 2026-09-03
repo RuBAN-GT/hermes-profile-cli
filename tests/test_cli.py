@@ -14,6 +14,7 @@ def test_help_command_prints_guide(capsys: pytest.CaptureFixture[str]) -> None:
     assert "auth import" in out
     assert "auth push" in out
     assert "backup create" in out
+    assert "hermes-profile mcp" in out
 
 
 def test_preflight_text_keeps_empty_diff_on_its_own_line(

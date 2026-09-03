@@ -50,8 +50,9 @@ CLI
   hermes-profile init --managed-dir DIR
                   [--profiles-dir DIR --fragments-dir DIR]
   hermes-profile tui
+  hermes-profile mcp
   hermes-profile list
-  hermes-profile create NAME
+  hermes-profile create NAME [--share-from PROFILE]
   hermes-profile status NAME
   hermes-profile render NAME
   hermes-profile preflight NAME
@@ -120,7 +121,9 @@ CLI
   hermes-profile help
   hermes-profile init --managed-dir DIR
   hermes-profile tui
+  hermes-profile mcp
   hermes-profile list
+  hermes-profile create NAME [--share-from PROFILE]
   hermes-profile apply NAME
   hermes-profile auth import --from ADAPTER --identity NAME
   hermes-profile auth push --host HOST --identity NAME

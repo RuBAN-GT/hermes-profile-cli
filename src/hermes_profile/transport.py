@@ -403,6 +403,25 @@ fi
             env_count = int(raw or "0")
         return {"config": config, "environment_count": env_count}
 
+    def ensure_private_dir(self, path: Path) -> None:
+        if not path.is_absolute() or ".." in path.parts:
+            raise ValueError("remote path must be absolute without '..'")
+        target = shlex.quote(str(path))
+        self._ssh_shell(f"umask 077 && mkdir -p {target} && chmod 700 {target}")
+
+    def list_files(self, root: Path) -> list[str]:
+        if not root.is_absolute() or ".." in root.parts:
+            raise ValueError("remote path must be absolute without '..'")
+        quoted = shlex.quote(str(root))
+        script = f"if [ ! -d {quoted} ]; then exit 0; fi; find {quoted} -type f | sort"
+        prefix = str(root).rstrip("/") + "/"
+        result: list[str] = []
+        for line in self._ssh_shell(script).stdout.splitlines():
+            path = line.strip()
+            if path.startswith(prefix):
+                result.append(path[len(prefix) :])
+        return result
+
     def write_private_file(self, path: Path, content: str) -> None:
         if not path.is_absolute() or ".." in path.parts:
             raise ValueError("remote path must be absolute without '..'")

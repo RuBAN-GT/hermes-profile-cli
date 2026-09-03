@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/) and
 [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.7.0] - 2026-09-04
+
+### Added
+
+- `create --share-from` copies shared fragment refs and writes a new identity
+  stub without copying secrets.
+- `create --add-config` / `--add-env` seed fragment refs on a new profile.
+- `update --set-config` / `--set-env` replace fragment lists.
+- `hermes-profile mcp` stdio server for local and SSH locations. Env tools
+  return keys only.
+
 ## [0.6.0] - 2026-09-04
 
 ### Added

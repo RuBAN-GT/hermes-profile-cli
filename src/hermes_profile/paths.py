@@ -353,7 +353,15 @@ def profile_dir(settings: Settings, name: str) -> Path:
     return settings.profiles_dir / name
 
 
+def safe_fragment_reference(reference: str) -> str:
+    path = Path(reference)
+    if path.is_absolute() or ".." in path.parts or not reference:
+        raise ValueError("fragment reference must be relative without '..'")
+    return reference
+
+
 def fragment_path(settings: Settings, reference: str) -> Path:
+    safe_fragment_reference(reference)
     path = (settings.fragments_dir / reference).resolve()
     root = settings.fragments_dir.resolve()
     if path != root and root not in path.parents:

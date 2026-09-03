@@ -121,12 +121,28 @@ flowchart TD
 
 ```yaml
 config:
-  - config/base.yaml
-  - config/telegram.yaml
+  - config/common.yaml
+  - config/gateway.yaml
+  - config/stt.yaml
+  - config/safety.yaml
+  - config/updates.yaml
+  - config/capabilities/browser.yaml
+  - config/roles/gogol.yaml
+  - config/profiles/ned.yaml
 env:
   - env/common.env
-  - env/tyrion.private.env
-auth: tyrion
+  - env/terminal.env
+  - env/profiles/ned.private.env
+auth: ned
+```
+
+`config/common.yaml` and capability fragments are shared. `config/roles/<source>.yaml`
+is the shareable policy of an existing profile. `config/profiles/<name>.yaml` is
+identity only: pet name, memory db path, docker volumes. Lists replace on merge,
+so toolsets and plugin enable/disable lists stay in the role fragment.
+
+```bash
+hermes-profile create ned --share-from gogol
 ```
 
 After creation and application, a profile looks like this:
@@ -153,7 +169,7 @@ start with a letter or digit, and have a maximum length of 63 characters.
 | Command | Use it to |
 | --- | --- |
 | `list` | list known profiles |
-| `create NAME` | create an empty profile and its `state/` directory |
+| `create NAME` | create a profile; `--share-from` copies shared fragment refs |
 | `show NAME` | inspect fragment references |
 | `render NAME` | view the resulting YAML; environment values stay hidden |
 | `preflight NAME` | show effective vs file diffs before apply |
@@ -176,16 +192,17 @@ start with a letter or digit, and have a maximum length of 63 characters.
 A typical workflow:
 
 ```bash
-hermes-profile create tyrion
-hermes-profile update tyrion --add-config config/base.yaml --add-env env/common.env
+hermes-profile create tyrion --share-from gogol
+hermes-profile update tyrion --add-config config/capabilities/web.yaml
 hermes-profile render tyrion
 hermes-profile preflight tyrion
 hermes-profile apply tyrion
 hermes-profile status tyrion
 ```
 
-For scripts, add the global `--format json`. `update` only adds fragment
-references; prepare the fragments themselves first.
+For scripts, add the global `--format json`. `update --add-*` appends fragment
+references; `--set-config` / `--set-env` replace the list. Prepare the fragments
+themselves first.
 
 ## Merging, Drift, And Secrets
 
@@ -227,7 +244,8 @@ order produced by fragment merges.
 `preflight` is a dry run. It prints two diffs and never writes files:
 
 - **effective diff**: behaviour after merging a leftover Hermes
-  `managed/config.yaml` onto the current profile `config.yaml`
+  `managed/config.yaml` onto the current profile `config.yaml` (retire that
+  overlay; shared settings belong in fragments)
 - **file materialization diff**: the lines `apply` would write into
   `config.yaml`
 
@@ -400,6 +418,20 @@ to `hermes`: it is the agent, not the profile manager.
 Without the remote CLI, Preview shows existing `config.yaml` and the number of
 variables in `.env`; it does not render fragments. Authentication inventory
 checks are also limited to file presence in this mode.
+
+## MCP
+
+Agents can drive the same local and SSH locations over stdio:
+
+```bash
+pip install 'hermes-profile-cli[mcp]'
+hermes-profile mcp
+```
+
+Pass `--config` or `HERMES_PROFILE_CONFIG_DIR`. Tools take `location=` (`local`,
+a local folder alias, or an SSH host alias). `create_profile` accepts
+`share_from`. Env reads and writes report keys only; values are never returned.
+`apply_profile` requires `confirm=true`.
 
 ## Updates And Help
 
