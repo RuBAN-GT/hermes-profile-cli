@@ -1,46 +1,44 @@
 # Hermes Profile CLI
 
-`hermes-profile` собирает изолированные домашние каталоги агента Hermes из
-общих YAML- и env-фрагментов. Выбор профиля и запись файлов происходят **до**
-запуска gateway. Инструмент работает локально и по SSH.
+`hermes-profile` materializes isolated Hermes agent homes from shared YAML and
+environment fragments. Profile selection and file generation happen **before**
 
-- Это не бинарник агента `hermes`: для удалённого менеджера используйте
-  `hermes-profile`.
-- Инструмент не создаёт, не перезапускает и не удаляет сервисы `launchd`.
-  Контроллер может вызвать `hermes-profile apply <profile>` перед работой со
-  службой профиля.
+- This is not the `hermes` agent binary: use `hermes-profile` for the remote
+  manager CLI.
+- The tool does not create, restart, or delete `launchd` services. A controller
+  can run `hermes-profile apply <profile>` before operating a profile service.
 
-## Содержание
+## Contents
 
-- [Что это](#что-это)
-- [Требования и установка](#требования-и-установка)
-- [Первый запуск](#первый-запуск)
-- [Как устроено](#как-устроено)
-- [Повседневная работа](#повседневная-работа)
-- [Слияние, drift и секреты](#слияние-drift-и-секреты)
-- [Удалённые хосты](#удалённые-хосты)
-- [Обновление и справка](#обновление-и-справка)
+- [What It Does](#what-it-does)
+- [Requirements And Installation](#requirements-and-installation)
+- [First Run](#first-run)
+- [How It Works](#how-it-works)
+- [Daily Operations](#daily-operations)
+- [Merging, Drift, And Secrets](#merging-drift-and-secrets)
+- [Remote Hosts](#remote-hosts)
+- [Updates And Help](#updates-and-help)
 
-## Что это
+## What It Does
 
-Профиль - это отдельная директория Hermes с `config.yaml`, `.env` и состоянием
-последнего применения. Общие фрагменты конфигурации остаются в одном месте, а
-`profile.yaml` лишь ссылается на них. Это удобно, когда несколько агентов
-делят базовую конфигурацию, но имеют разные модели, интеграции или секреты.
+A profile is a separate Hermes directory containing `config.yaml`, `.env`, and
+the state from its last apply. Shared configuration fragments stay in one place,
+while `profile.yaml` only refers to them. This is useful when several agents
+share a base configuration but need different models, integrations, or secrets.
 
-Фрагменты и сами профили - операционные данные: этот репозиторий их не создаёт
-и не хранит.
+Fragments and profiles are operational data: this repository neither creates
+nor tracks them.
 
-## Требования и установка
+## Requirements And Installation
 
-Нужны Python 3.11+, `git` и, для удалённых хостов, системный `ssh`. На macOS,
-где `python3` старее 3.11, установите современный Python:
+You need Python 3.11+, `git`, and system `ssh` for remote hosts. If the macOS
+`python3` is older than 3.11, install a current Python version:
 
 ```bash
 brew install python@3.12
 ```
 
-Установка для локальной работы:
+Install for local use:
 
 ```bash
 git clone https://github.com/RuBAN-GT/hermes-profile-cli.git
@@ -51,26 +49,26 @@ python3 -m venv .venv
 .venv/bin/hermes-profile --version
 ```
 
-При желании сделайте команду доступной из `PATH`:
+Optionally put the command on your `PATH`:
 
 ```bash
 mkdir -p ~/.local/bin
 ln -sf "$(pwd)/.venv/bin/hermes-profile" ~/.local/bin/hermes-profile
 ```
 
-## Первый запуск
+## First Run
 
-Основной путь - интерактивная настройка:
+The primary path is interactive setup:
 
 ```bash
 hermes-profile tui
 ```
 
-Сначала выберите этот компьютер или SSH-хост. Затем укажите пути менеджера,
-профилей и фрагментов. В TUI `?` или `F1` открывают краткую справку; выбранная
-тема сохраняется в конфигурации менеджера.
+First choose this computer or an SSH host, then set the manager, profiles, and
+fragments paths. In the TUI, `?` or `F1` opens concise help; the selected theme
+is saved in the manager configuration.
 
-Для сценариев без TUI используйте `init`:
+For non-interactive use, run `init`:
 
 ```bash
 hermes-profile init --managed-dir /srv/hermes/managed
@@ -79,34 +77,34 @@ hermes-profile init --managed-dir /srv/hermes/managed \
   --fragments-dir /srv/hermes/fragments
 ```
 
-По умолчанию конфигурация менеджера хранится в
-`~/.config/hermes-profile/config.yaml`, а `managed_dir` - в
-`~/.local/share/hermes-profile/managed`. Также можно скопировать
-`config.example.yaml` вне репозитория и передать его через `--config` или
-`HERMES_PROFILE_CONFIG`. Пути в примере - только примеры.
+By default, the manager configuration is
+`~/.config/hermes-profile/config.yaml`, and `managed_dir` is
+`~/.local/share/hermes-profile/managed`. You can also copy
+`config.example.yaml` outside this repository and pass it with `--config` or
+`HERMES_PROFILE_CONFIG`. Paths in the example are examples only.
 
-## Как устроено
+## How It Works
 
-Конфигурация менеджера перечисляет места работы: основное локальное, другие
-локальные папки и SSH-хосты. У каждого места есть три корня:
-`managed_dir`, `profiles_dir` и `fragments_dir`.
+The manager configuration lists work locations: the primary local location,
+other local folders, and SSH hosts. Each location has three roots:
+`managed_dir`, `profiles_dir`, and `fragments_dir`.
 
 ```mermaid
 flowchart TD
-  cfg["config.yaml менеджера"]
-  cfg --> local["основное local"]
-  cfg --> extra["другие local_locations"]
-  cfg --> ssh["hosts по SSH"]
+  cfg["Manager config.yaml"]
+  cfg --> local["Primary local location"]
+  cfg --> extra["Other local_locations"]
+  cfg --> ssh["SSH hosts"]
   local --> roots["managed_dir / profiles_dir / fragments_dir"]
   extra --> roots
   ssh --> roots
   roots --> profiles["profiles_dir / name"]
   roots --> fragments["fragments_dir"]
-  profiles --> profile["profile.yaml: только ссылки"]
+  profiles --> profile["profile.yaml: references only"]
   fragments --> profile
 ```
 
-`profile.yaml` хранит относительные ссылки внутри `fragments_dir`:
+`profile.yaml` contains paths relative to `fragments_dir`:
 
 ```yaml
 config:
@@ -117,7 +115,7 @@ env:
   - env/tyrion.private.env
 ```
 
-После создания и применения профиль выглядит так:
+After creation and application, a profile looks like this:
 
 ```text
 <profiles_dir>/<profile>/
@@ -126,30 +124,30 @@ env:
   .env
   runtime-config.yaml
   runtime.env
-  auth.json                     # принадлежит Hermes, менеджер его не пишет
+  auth.json                     # Hermes-owned; the manager never writes it
   state/
     applied-config.yaml
     applied.env
     auth-inventory.sha256
 ```
 
-Имя профиля может содержать только строчные латинские буквы, цифры и дефисы,
-начинаясь с буквы или цифры; максимальная длина - 63 символа.
+Profile names may contain lowercase ASCII letters, digits, and hyphens, must
+start with a letter or digit, and have a maximum length of 63 characters.
 
-## Повседневная работа
+## Daily Operations
 
-| Команда | Когда использовать |
+| Command | Use it to |
 | --- | --- |
-| `list` | посмотреть известные профили |
-| `create NAME` | создать пустой профиль и его `state/` |
-| `show NAME` | проверить ссылки на фрагменты |
-| `render NAME` | просмотреть итоговый YAML; значения env не выводятся |
-| `status NAME` | проверить изменения файлов и inventory авторизации |
-| `apply NAME` | собрать фрагменты и записать `config.yaml` и `.env` |
-| `reconcile NAME` | сохранить изменения Hermes в runtime overlay |
-| `delete NAME --confirm` | удалить профиль |
+| `list` | list known profiles |
+| `create NAME` | create an empty profile and its `state/` directory |
+| `show NAME` | inspect fragment references |
+| `render NAME` | view the resulting YAML; environment values stay hidden |
+| `status NAME` | check file drift and authentication inventory |
+| `apply NAME` | render fragments into `config.yaml` and `.env` |
+| `reconcile NAME` | preserve Hermes changes in the runtime overlay |
+| `delete NAME --confirm` | delete a profile |
 
-Обычный рабочий цикл:
+A typical workflow:
 
 ```bash
 hermes-profile create tyrion
@@ -159,57 +157,57 @@ hermes-profile apply tyrion
 hermes-profile status tyrion
 ```
 
-Для скриптов добавьте глобальный `--format json`. Команда `update` только
-добавляет ссылки на фрагменты; сами фрагменты подготовьте заранее.
+For scripts, add the global `--format json`. `update` only adds fragment
+references; prepare the fragments themselves first.
 
-## Слияние, drift и секреты
+## Merging, Drift, And Secrets
 
-YAML-карты сливаются рекурсивно. Списки и простые значения из более позднего
-фрагмента заменяют предыдущие. Env-фрагменты допускают только комментарии,
-пустые строки и `NAME=value`; они никогда не выполняются как shell-код.
+YAML maps merge recursively. Lists and scalar values in a later fragment replace
+earlier values. Environment fragments allow only comments, blank lines, and
+`NAME=value` assignments; they are never executed as shell code.
 
 ```mermaid
 flowchart LR
-  fragments["фрагменты + runtime overlay"] --> render["render"]
+  fragments["Fragments + runtime overlay"] --> render["render"]
   render --> apply["apply"]
-  apply --> files["config.yaml и .env"]
+  apply --> files["config.yaml and .env"]
   apply --> snapshot["state/applied-*"]
-  files --> hermes["Hermes или dashboard"]
+  files --> hermes["Hermes or dashboard"]
   hermes --> drift["status: drift"]
   drift -->|"reconcile"| runtime["runtime-config.yaml / runtime.env"]
   drift -->|"apply --discard-runtime"| apply
   runtime --> render
 ```
 
-`apply` не перезапишет `config.yaml` или `.env`, если они отличаются от
-последнего снимка. Это защищает изменения, сделанные через Hermes, dashboard
-или плагин. Выберите один из путей:
+`apply` refuses to overwrite `config.yaml` or `.env` when they differ from the
+last snapshot. This protects changes made through Hermes, a dashboard, or a
+plugin. Choose one path:
 
 ```bash
-# Сохранить добавленные и изменённые runtime-значения в overlay.
+# Preserve added and changed runtime values in the overlay.
 hermes-profile reconcile tyrion
 hermes-profile apply tyrion
 
-# Отбросить runtime overlay и собрать только объявленные фрагменты.
+# Discard the runtime overlay and build from declared fragments only.
 hermes-profile apply tyrion --discard-runtime
 ```
 
-Удаление ключей при `reconcile` пока не поддерживается.
+`reconcile` does not support deleting keys yet.
 
-`auth.json` принадлежит Hermes. Менеджер не копирует, не показывает и не
-изменяет его. `status` отслеживает только хеш inventory: provider, ID
-учётной записи, тип авторизации и источник. Обновление токена не создаёт drift;
-добавление, удаление или смена учётной записи создаёт. `reconcile` лишь
-подтверждает текущее inventory.
+Hermes owns `auth.json`. The manager never copies, displays, or edits it.
+`status` tracks only an inventory digest: provider, credential ID,
+authentication type, and source. Token refreshes do not cause drift; adding,
+removing, or changing a credential does. `reconcile` only acknowledges the
+current inventory.
 
-Приватные env-файлы и снимки записываются с правами `0600`; каталоги профиля и
-`state/` - с `0700`.
+Private environment files and snapshots are written with mode `0600`; profile
+and `state/` directories use mode `0700`.
 
-## Удалённые хосты
+## Remote Hosts
 
-Сначала добавьте SSH-хост через `hermes-profile tui` или конфигурацию менеджера.
-Используйте существующий SSH agent и ключи: пароли не сохраняются. Для TUI
-доступны кнопки **Save host**, **Init dirs** и **Clone + install**.
+Add an SSH host through `hermes-profile tui` or the manager configuration. Use
+your existing SSH agent and keys; passwords are not stored. The TUI provides
+**Save host**, **Init dirs**, and **Clone + install**.
 
 ```bash
 hermes-profile ssh init gateway-a
@@ -218,10 +216,10 @@ hermes-profile --host gateway-a list
 hermes-profile --host gateway-a apply tyrion
 ```
 
-`ssh init` создаёт только каталоги и secret-free конфигурацию менеджера, если
-её ещё нет. Он не копирует профили, `.env`, credentials и не создаёт сервисы.
-`ssh install` сначала выполняет `init`, затем клонирует этот репозиторий и
-устанавливает CLI на удалённой машине:
+`ssh init` creates only directories and a secret-free manager configuration if
+one does not yet exist. It does not copy profiles, `.env` files, credentials, or
+create services. `ssh install` first runs `init`, then clones this repository
+and installs the CLI on the remote machine:
 
 ```text
 ~/.local/share/hermes-profile/src
@@ -229,30 +227,30 @@ hermes-profile --host gateway-a apply tyrion
 ~/.local/share/hermes-profile/venv/bin/hermes-profile
 ```
 
-Удалённому хосту также нужны `git` и Python 3.11+. Не указывайте `hermes` как
-`remote_binary`: это агент, а не менеджер профилей.
+The remote host also needs `git` and Python 3.11+. Do not set `remote_binary`
+to `hermes`: it is the agent, not the profile manager.
 
-| Действие | Без remote CLI | С `hermes-profile` на хосте |
+| Action | Without the remote CLI | With `hermes-profile` on the host |
 | --- | --- | --- |
-| `list`, `status`, Preview | чтение файлов по SSH | CLI JSON |
-| `create`, `apply`, `reconcile` | нет | да |
-| `ssh doctor` | нет | да |
+| `list`, `status`, Preview | SSH file reads | CLI JSON |
+| `create`, `apply`, `reconcile` | no | yes |
+| `ssh doctor` | no | yes |
 
-Preview без удалённого CLI показывает уже записанные `config.yaml` и число
-переменных `.env`; он не собирает фрагменты. Проверка auth inventory в таком
-режиме также ограничена наличием файлов.
+Without the remote CLI, Preview shows existing `config.yaml` and the number of
+variables in `.env`; it does not render fragments. Authentication inventory
+checks are also limited to file presence in this mode.
 
-## Обновление и справка
+## Updates And Help
 
-Обновить установленный из git CLI:
+Update a CLI installed from git:
 
 ```bash
 hermes-profile self-update
 ```
 
-Команда получает `main`, делает `reset --hard` и переустанавливает пакет в
-текущий Python. Не запускайте её из checkout с незакоммиченными изменениями.
+The command fetches `main`, runs `reset --hard`, and reinstalls the package into
+the current Python. Do not run it from a checkout with uncommitted changes.
 
-Полная справка доступна через `hermes-profile help`, а в TUI - через `?` или
-`F1`. Требования к вкладу и локальные проверки описаны в
+Full help is available through `hermes-profile help`, or `?` / `F1` in the TUI.
+Contribution requirements and local checks are in
 [CONTRIBUTING.md](CONTRIBUTING.md).
