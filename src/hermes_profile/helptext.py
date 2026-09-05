@@ -31,6 +31,7 @@ TUI keys
   ctrl+p          Command palette
   enter           Open the selected location
   a               Add a location (locations screen) or Apply (workspace)
+  shift+a         Apply all profiles in the workspace
   e               Edit a location, including the primary local workspace
   d               Remove a location, or delete the selected profile
   i               Create remote dirs/config if missing
@@ -58,6 +59,7 @@ CLI
   hermes-profile preflight NAME
   hermes-profile reconcile NAME
   hermes-profile apply NAME
+  hermes-profile apply-all
    hermes-profile auth shared-status
    hermes-profile auth map-status
    hermes-profile auth bind NAME
@@ -103,6 +105,7 @@ HELP_TEXT_RU = """
   ctrl+p          Палитра команд
   enter           Открыть площадку
   a               Добавить площадку или Apply
+  shift+a         Применить все профили площадки
   e               Править площадку
   d               Убрать площадку или удалить профиль
   i               Создать удалённые каталоги/конфиг

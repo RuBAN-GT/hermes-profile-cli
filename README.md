@@ -171,6 +171,7 @@ start with a letter or digit, and have a maximum length of 63 characters.
 | `preflight NAME` | show effective vs file diffs before apply |
 | `status NAME` | check file drift and authentication inventory |
 | `apply NAME` | render fragments into `config.yaml` and `.env` |
+| `apply-all` | render every profile; stops at the first profile with drift or an error |
 | `reconcile NAME` | preserve Hermes changes in the runtime overlay |
 | `auth shared-status` | inspect the Hermes root auth fallback |
 | `auth map-status` | inspect identity bindings without exposing secrets |
