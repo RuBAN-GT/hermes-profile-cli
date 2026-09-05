@@ -20,7 +20,12 @@ from hermes_profile.env import parse_env, render_env
 from hermes_profile.merge import NO_CHANGE, changed_values, merge
 from hermes_profile.models import Settings
 from hermes_profile.paths import profile_dir, write_private
-from hermes_profile.profiles import config_documents, env_documents, load_profile
+from hermes_profile.profiles import (
+    config_documents,
+    env_documents,
+    list_profiles,
+    load_profile,
+)
 
 
 def render_profile(
@@ -189,6 +194,13 @@ def apply(settings: Settings, name: str, discard_runtime: bool = False) -> None:
     auth_map = load_auth_map(settings)
     if auth_map.profiles or auth_map.defaults:
         bind_profile_auth(settings, name)
+
+
+def apply_all(settings: Settings, discard_runtime: bool = False) -> list[str]:
+    names = list_profiles(settings)
+    for name in names:
+        apply(settings, name, discard_runtime)
+    return names
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

@@ -7,6 +7,7 @@ from hermes_profile.models import Settings
 from hermes_profile.profiles import create_profile, list_profiles
 from hermes_profile.service import (
     apply,
+    apply_all,
     preflight,
     reconcile,
     render_profile,
@@ -60,6 +61,16 @@ def test_apply_materializes_fragments_and_captures_snapshot(tmp_path: Path) -> N
         "env_drift": False,
         "auth_inventory_changed": False,
     }
+
+
+def test_apply_all_materializes_each_profile(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _profile(settings)
+    create_profile(settings, "olenna")
+
+    assert apply_all(settings) == ["olenna", "tyrion"]
+    assert (settings.profiles_dir / "olenna" / "config.yaml").is_file()
+    assert (settings.profiles_dir / "tyrion" / "config.yaml").is_file()
 
 
 def test_reconcile_preserves_runtime_changes(tmp_path: Path) -> None:
