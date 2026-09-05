@@ -14,6 +14,7 @@ from hermes_profile.paths import PROFILE_NAME
 from hermes_profile.profiles import create_profile, delete_profile, list_profiles
 from hermes_profile.service import (
     apply,
+    apply_all,
     preflight,
     reconcile,
     render_profile,
@@ -87,6 +88,9 @@ class LocalTransport:
             apply(self.settings, name, discard_runtime=True)
             return {"applied": name, "discarded_runtime": True}
         raise ValueError(f"unsupported profile action: {action}")
+
+    def apply_all(self) -> list[str]:
+        return apply_all(self.settings)
 
 
 class SshTransport:
@@ -216,6 +220,22 @@ class SshTransport:
             f"{self.host.alias}: {action} needs hermes-profile on the remote host. "
             f"Install it with: hermes-profile ssh install {self.host.alias}"
         )
+
+    def apply_all(self) -> list[str]:
+        if not self._cli_available():
+            raise ValueError(
+                f"{self.host.alias}: apply-all needs hermes-profile on the remote "
+                "host. "
+                f"Install it with: hermes-profile ssh install {self.host.alias}"
+            )
+        applied = self.run(["apply-all"]).get("applied")
+        if not isinstance(applied, list) or not all(
+            isinstance(profile, str) for profile in applied
+        ):
+            raise ValueError(
+                f"remote {self.host.alias} returned invalid applied profiles"
+            )
+        return applied
 
     def doctor(self) -> dict[str, Any]:
         version = self._ssh([self.host.remote_binary, "--version"]).stdout.strip()

@@ -308,3 +308,17 @@ def test_remote_arguments_remove_client_only_options() -> None:
             "tyrion",
         ]
     ) == ["apply", "tyrion"]
+
+
+def test_ssh_apply_all_uses_remote_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = SshTransport(_host())
+    calls: list[list[str]] = []
+    monkeypatch.setattr(transport, "_cli_available", lambda: True)
+    monkeypatch.setattr(
+        transport,
+        "run",
+        lambda arguments: calls.append(arguments) or {"applied": ["alpha", "beta"]},
+    )
+
+    assert transport.apply_all() == ["alpha", "beta"]
+    assert calls == [["apply-all"]]
