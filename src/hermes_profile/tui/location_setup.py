@@ -5,6 +5,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label
 
+from hermes_profile.i18n import t
 from hermes_profile.models import LocalLocation
 from hermes_profile.paths import (
     PROFILE_NAME,
@@ -56,7 +57,7 @@ class ConfirmScreen(ModalScreen[bool]):
             yield Label(self.body_text, id="confirm-body")
             with Horizontal(id="confirm-actions"):
                 yield Button(self.confirm_label, id="confirm-ok")
-                yield Button("Cancel", id="confirm-cancel")
+                yield Button(t("cancel"), id="confirm-cancel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "confirm-ok")

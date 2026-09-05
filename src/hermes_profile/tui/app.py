@@ -69,6 +69,7 @@ WORKSPACE_ACTIONS = {
     "preflight",
     "reconcile",
     "apply",
+    "apply_all",
     "back",
     "create_profile",
     "auth",
@@ -168,6 +169,8 @@ class ProfileTransport(Protocol):
 
     def action(self, name: str, action: str) -> dict[str, Any]: ...
 
+    def apply_all(self) -> list[str]: ...
+
     def create(self, name: str) -> None: ...
 
     def delete(self, name: str) -> None: ...
@@ -239,8 +242,11 @@ class ProfileApp(App[None]):
         color: $foreground;
         text-style: bold;
     }
-    #actions { height: 1; margin-top: 1; }
+    #actions { height: 2; margin-top: 1; }
+    #actions Horizontal { height: 1; }
     #actions Button {
+        width: auto;
+        min-width: 0;
         min-height: 1;
         height: 1;
         margin-right: 1;
@@ -258,7 +264,7 @@ class ProfileApp(App[None]):
     #preview { color: $primary; }
     #preflight { color: $accent; }
     #reconcile { color: $warning; }
-    #apply { color: $success; }
+    #apply, #apply-all { color: $success; }
     #actions Button:disabled { color: $secondary; background: $surface; }
     .clean { color: $success; }
     .changed { color: $warning; }
@@ -273,6 +279,7 @@ class ProfileApp(App[None]):
         Binding("p", "preview", "Preview"),
         Binding("f", "preflight", "Preflight"),
         Binding("a", "apply", "Apply"),
+        Binding("shift+a", "apply_all", "Apply all", show=False),
         Binding("u", "auth", "Auth"),
         Binding("m", "more", "More"),
         Binding("ctrl+t", "cycle_theme", "Theme"),
@@ -309,43 +316,51 @@ class ProfileApp(App[None]):
                     yield Button(t("new_profile"), id="add-profile")
                 with Vertical(id="detail"):
                     yield Static(t("pick_location"), id="profile-detail")
-                    with Horizontal(id="actions"):
-                        yield Button(
-                            t("preview"),
-                            id="preview",
-                            disabled=True,
-                            tooltip=t("tooltip_preview"),
-                        )
-                        yield Button(
-                            t("preflight"),
-                            id="preflight",
-                            disabled=True,
-                            tooltip=t("tooltip_preflight"),
-                        )
-                        yield Button(
-                            t("reconcile"),
-                            id="reconcile",
-                            disabled=True,
-                            tooltip=t("tooltip_reconcile"),
-                        )
-                        yield Button(
-                            t("apply"),
-                            id="apply",
-                            disabled=True,
-                            tooltip=t("tooltip_apply"),
-                        )
-                        yield Button(
-                            t("auth"),
-                            id="auth",
-                            disabled=True,
-                            tooltip=t("tooltip_auth"),
-                        )
-                        yield Button(
-                            t("more"),
-                            id="more",
-                            disabled=True,
-                            tooltip=t("tooltip_more"),
-                        )
+                    with Vertical(id="actions"):
+                        with Horizontal():
+                            yield Button(
+                                t("preview"),
+                                id="preview",
+                                disabled=True,
+                                tooltip=t("tooltip_preview"),
+                            )
+                            yield Button(
+                                t("preflight"),
+                                id="preflight",
+                                disabled=True,
+                                tooltip=t("tooltip_preflight"),
+                            )
+                            yield Button(
+                                t("reconcile"),
+                                id="reconcile",
+                                disabled=True,
+                                tooltip=t("tooltip_reconcile"),
+                            )
+                            yield Button(
+                                t("apply"),
+                                id="apply",
+                                disabled=True,
+                                tooltip=t("tooltip_apply"),
+                            )
+                        with Horizontal():
+                            yield Button(
+                                t("apply_all"),
+                                id="apply-all",
+                                disabled=True,
+                                tooltip=t("tooltip_apply_all"),
+                            )
+                            yield Button(
+                                t("auth"),
+                                id="auth",
+                                disabled=True,
+                                tooltip=t("tooltip_auth"),
+                            )
+                            yield Button(
+                                t("more"),
+                                id="more",
+                                disabled=True,
+                                tooltip=t("tooltip_more"),
+                            )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -381,7 +396,7 @@ class ProfileApp(App[None]):
             set_theme(self.config, theme)
 
     def action_refresh(self) -> None:
-        self._set_busy(f"{self.location_title} · loading profiles...")
+        self._set_busy(t("loading_profiles", title=self.location_title))
         self.load_profiles()
 
     def action_preview(self) -> None:
@@ -406,6 +421,22 @@ class ProfileApp(App[None]):
             lambda confirmed: self._start_action("apply") if confirmed else None,
         )
 
+    def action_apply_all(self) -> None:
+        count = len(self.profile_status)
+        if count == 0:
+            self.notify(
+                t("no_profiles", location=self.location_title), severity="warning"
+            )
+            return
+        self.push_screen(
+            ConfirmScreen(
+                t("apply_all"),
+                t("apply_all_body", count=count),
+                t("apply_all"),
+            ),
+            lambda confirmed: self._start_apply_all() if confirmed else None,
+        )
+
     def action_cycle_theme(self) -> None:
         self.theme = next_theme(self.theme)
         self.notify(t("theme_set", theme=self.theme))
@@ -428,6 +459,7 @@ class ProfileApp(App[None]):
         self.query_one("#preflight", Button).label = t("preflight")
         self.query_one("#reconcile", Button).label = t("reconcile")
         self.query_one("#apply", Button).label = t("apply")
+        self.query_one("#apply-all", Button).label = t("apply_all")
         self.query_one("#auth", Button).label = t("auth")
         self.query_one("#more", Button).label = t("more")
         for button_id, tip in (
@@ -435,6 +467,7 @@ class ProfileApp(App[None]):
             ("preflight", "tooltip_preflight"),
             ("reconcile", "tooltip_reconcile"),
             ("apply", "tooltip_apply"),
+            ("apply-all", "tooltip_apply_all"),
             ("auth", "tooltip_auth"),
             ("more", "tooltip_more"),
         ):
@@ -496,6 +529,8 @@ class ProfileApp(App[None]):
             self.action_reconcile()
         elif event.button.id == "apply":
             self.action_apply()
+        elif event.button.id == "apply-all":
+            self.action_apply_all()
         elif event.button.id == "auth":
             self.action_auth()
         elif event.button.id == "more":
@@ -521,6 +556,11 @@ class ProfileApp(App[None]):
         self, name: str, action: str
     ) -> tuple[str, str, dict[str, Any]]:
         return name, action, self.transport.action(name, action)
+
+    @work(thread=True, exclusive=True, group="operation", exit_on_error=False)
+    def run_apply_all(self) -> tuple[str, str, dict[str, Any]]:
+        applied = self.transport.apply_all()
+        return t("all_profiles"), "apply-all", {"applied": applied}
 
     @work(thread=True, exclusive=True, group="auth", exit_on_error=False)
     def run_auth_sync(
@@ -642,6 +682,13 @@ class ProfileApp(App[None]):
             self.query_one("#summary", Label).update(f"{name} · preflight")
             self.notify(f"Preflighted {name}")
             return
+        if action == "apply-all":
+            count = len(result.get("applied", []))
+            completed = t("applied_all", count=count)
+            self.notify(completed)
+            self.query_one("#summary", Label).update(completed)
+            self.action_refresh()
+            return
         self.notify(f"{name}: {action} completed")
         self.query_one("#summary", Label).update(f"{name}: {action} completed")
         self.action_refresh()
@@ -681,6 +728,20 @@ class ProfileApp(App[None]):
         )
         self.run_profile_operation(self.selected_profile, action)
 
+    def _start_apply_all(self) -> None:
+        remote = self.selected_host.startswith("ssh--")
+        via = t("over_ssh") if remote else ""
+        hint = (
+            t("remote_timeout", seconds=SSH_TIMEOUT_SECONDS)
+            if remote
+            else ""
+        )
+        self._set_busy(
+            t("applying_all", location=self.location_title),
+            f"[b]{t('all_profiles')}[/]\n\n{t('applying')}{via}...{hint}",
+        )
+        self.run_apply_all()
+
     def _set_busy(self, summary: str | None, detail: str | None = None) -> None:
         self.query_one("#loading", LoadingIndicator).display = (
             summary is not None and self.settings.animations
@@ -706,6 +767,8 @@ class ProfileApp(App[None]):
     def _set_actions(self, enabled: bool) -> None:
         for button in self.query("#actions Button"):
             button.disabled = not enabled
+            if button.id == "apply-all":
+                button.disabled = not self.profile_status
         self.refresh_bindings()
 
     def _profile_created(self, name: str | None) -> None:

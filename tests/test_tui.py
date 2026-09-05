@@ -17,7 +17,7 @@ from hermes_profile.tui.app import (
 )
 from hermes_profile.tui.help import HelpScreen
 from hermes_profile.tui.location_home import LocationHomeScreen
-from hermes_profile.tui.location_setup import AuthSyncScreen
+from hermes_profile.tui.location_setup import AuthSyncScreen, ConfirmScreen
 from hermes_profile.tui.menus import AuthHubScreen, MoreActionsScreen
 from hermes_profile.tui.setup import LocalSetupScreen, SetupApp
 from hermes_profile.tui.ssh_setup import SshSetupScreen
@@ -134,6 +134,7 @@ def test_tui_hides_workspace_keys_on_location_home(tmp_path: Path) -> None:
             await pilot.pause()
             assert app.check_action("preview", ()) is None
             assert app.check_action("init_remote", ()) is False
+            assert app.query_one("#apply-all", Button).disabled
 
     asyncio.run(run())
 
@@ -179,6 +180,29 @@ def test_tui_load_error_replaces_loading_copy(tmp_path: Path) -> None:
             assert "Loading" not in detail
 
     asyncio.run(run())
+
+
+def test_tui_apply_all_materializes_every_profile(tmp_path: Path) -> None:
+    root = tmp_path / "managed"
+    settings = Settings(root, root / "profiles", root / "fragments")
+    create_profile(settings, "alpha")
+    create_profile(settings, "beta")
+    app = ProfileApp(settings, tmp_path / "config.yaml")
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.click("#apply-all")
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmScreen)
+            await pilot.click("#confirm-ok")
+            await pilot.pause()
+
+    asyncio.run(run())
+    assert (settings.profiles_dir / "alpha" / "config.yaml").is_file()
+    assert (settings.profiles_dir / "beta" / "config.yaml").is_file()
 
 
 def test_preview_rows_describe_top_level_keys() -> None:
