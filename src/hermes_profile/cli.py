@@ -35,6 +35,7 @@ from hermes_profile.profiles import (
 from hermes_profile.self_update import self_update
 from hermes_profile.service import (
     apply,
+    apply_all,
     preflight,
     reconcile,
     render_profile,
@@ -143,6 +144,8 @@ def _parser() -> argparse.ArgumentParser:
     apply_parser = commands.add_parser("apply")
     apply_parser.add_argument("name")
     apply_parser.add_argument("--discard-runtime", action="store_true")
+    apply_all_parser = commands.add_parser("apply-all")
+    apply_all_parser.add_argument("--discard-runtime", action="store_true")
     update = commands.add_parser("update")
     update.add_argument("name")
     update.add_argument("--add-config", action="append", default=[])
@@ -312,6 +315,11 @@ def _run_local(arguments: argparse.Namespace, settings: Settings) -> dict[str, A
     if arguments.command == "apply":
         apply(settings, arguments.name, arguments.discard_runtime)
         return {"ok": True, "applied": arguments.name}
+    if arguments.command == "apply-all":
+        return {
+            "ok": True,
+            "applied": apply_all(settings, arguments.discard_runtime),
+        }
     if arguments.command == "update":
         _update(
             settings,
