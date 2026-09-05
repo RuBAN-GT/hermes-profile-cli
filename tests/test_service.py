@@ -151,6 +151,20 @@ def test_apply_sorts_top_level_yaml_keys(tmp_path: Path) -> None:
     assert text.index("alpha:") < text.index("zebra:")
 
 
+def test_apply_preserves_cyrillic_values_in_materialized_yaml(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _profile(settings)
+    (settings.fragments_dir / "config" / "base.yaml").write_text(
+        "display:\n  pet: Вилли\n"
+    )
+
+    apply(settings, "tyrion")
+
+    text = (settings.profiles_dir / "tyrion" / "config.yaml").read_text()
+    assert "pet: Вилли" in text
+    assert "\\u" not in text
+
+
 def test_reconcile_reports_removed_auth_inventory(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     _profile(settings)

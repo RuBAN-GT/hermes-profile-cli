@@ -206,7 +206,7 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
 
 def _yaml_text(data: dict[str, Any]) -> str:
     return yaml.safe_dump(
-        {key: data[key] for key in sorted(data)}, allow_unicode=False, sort_keys=False
+        {key: data[key] for key in sorted(data)}, allow_unicode=True, sort_keys=False
     )
 
 
