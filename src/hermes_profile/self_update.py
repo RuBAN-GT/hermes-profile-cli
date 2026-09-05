@@ -11,8 +11,15 @@ UPDATE_TIMEOUT_SECONDS = 180
 
 def self_update() -> dict[str, str]:
     src = _source_checkout()
-    _run(["git", "-C", str(src), "fetch", "--depth", "1", "origin", "main"])
-    _run(["git", "-C", str(src), "reset", "--hard", "origin/main"])
+    dirty = _run(["git", "-C", str(src), "status", "--porcelain"])
+    if dirty.strip():
+        raise ValueError(
+            "source checkout has local changes; commit or stash them first"
+        )
+    shallow = _run(["git", "-C", str(src), "rev-parse", "--is-shallow-repository"])
+    fetch_options = ["--unshallow"] if shallow.strip() == "true" else []
+    _run(["git", "-C", str(src), "fetch", *fetch_options, "origin", "main"])
+    _run(["git", "-C", str(src), "merge", "--ff-only", "origin/main"])
     _run([sys.executable, "-m", "pip", "install", "-U", str(src)])
     return {
         "ok": "true",
@@ -25,9 +32,9 @@ def self_update() -> dict[str, str]:
 
 def _source_checkout() -> Path:
     package_repo = Path(__file__).resolve().parents[2]
-    if (package_repo / ".git").is_dir() and (package_repo / "pyproject.toml").is_file():
+    if (package_repo / ".git").exists() and (package_repo / "pyproject.toml").is_file():
         return package_repo
-    if (SHARE_SRC / ".git").is_dir():
+    if (SHARE_SRC / ".git").exists():
         return SHARE_SRC
     SHARE_SRC.parent.mkdir(parents=True, exist_ok=True)
     if SHARE_SRC.exists():
@@ -63,7 +70,7 @@ def _installed_version() -> str:
     return version or __version__
 
 
-def _run(command: list[str]) -> None:
+def _run(command: list[str]) -> str:
     try:
         completed = subprocess.run(
             command,
@@ -79,3 +86,4 @@ def _run(command: list[str]) -> None:
     if completed.returncode:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise ValueError(detail or f"command failed: {' '.join(command)}")
+    return completed.stdout

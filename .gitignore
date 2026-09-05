@@ -14,3 +14,6 @@ fragments/
 state/
 *.local.yaml
 *.private.env
+
+# Local agent session state.
+.omo/

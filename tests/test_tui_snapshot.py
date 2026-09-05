@@ -7,7 +7,9 @@ from hermes_profile.tui.app import ProfileApp
 SNAPSHOT_SIZE = (120, 40)
 
 
-def test_workspace_snapshot(snap_compare, tmp_path: Path) -> None:
+def test_workspace_snapshot(snap_compare, tmp_path: Path, monkeypatch) -> None:
+    # Keep snapshots stable in terminals and CI that disable color.
+    monkeypatch.delenv("NO_COLOR", raising=False)
     root = tmp_path / "managed"
     settings = Settings(root, root / "profiles", root / "fragments", animations=False)
     create_profile(settings, "tyrion")

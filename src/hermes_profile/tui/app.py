@@ -19,6 +19,7 @@ from textual.widgets import (
 )
 from textual.worker import Worker, WorkerState
 
+from hermes_profile import __version__
 from hermes_profile.auth_adapters import (
     export_auth,
     import_auth,
@@ -270,7 +271,7 @@ class ProfileApp(App[None]):
     .changed { color: $warning; }
     .selected { color: $primary; }
     """
-    TITLE = "Hermes Profiles"
+    TITLE = f"Hermes Profiles v{__version__}"
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("escape", "back", "Locations", key_display="esc"),
@@ -731,11 +732,7 @@ class ProfileApp(App[None]):
     def _start_apply_all(self) -> None:
         remote = self.selected_host.startswith("ssh--")
         via = t("over_ssh") if remote else ""
-        hint = (
-            t("remote_timeout", seconds=SSH_TIMEOUT_SECONDS)
-            if remote
-            else ""
-        )
+        hint = t("remote_timeout", seconds=SSH_TIMEOUT_SECONDS) if remote else ""
         self._set_busy(
             t("applying_all", location=self.location_title),
             f"[b]{t('all_profiles')}[/]\n\n{t('applying')}{via}...{hint}",

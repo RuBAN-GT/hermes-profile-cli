@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/) and
 [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.8.0] - 2026-09-05
+
+### Added
+
+- Running version in the TUI header, including first-run setup.
+- Bulk `apply-all` in the CLI and TUI for local and SSH locations.
+- Illustrated README with a quick start, keyboard shortcuts, and a separate user guide.
+
+### Fixed
+
+- Self-update refuses local changes and uses a fast-forward merge so local work
+  and divergent commits cannot be overwritten by a hard reset.
+- Self-update recognizes Git worktree checkouts.
+- Refresh the workspace snapshot to include the bulk apply action and make
+  its colors independent of the terminal environment.
+
 ## [0.7.0] - 2026-09-04
 
 ### Added

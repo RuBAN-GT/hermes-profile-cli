@@ -4,6 +4,7 @@ from threading import Event
 
 from textual.widgets import Button, Input, Label, ListView, LoadingIndicator, Static
 
+from hermes_profile import __version__
 from hermes_profile.models import LocalLocation, Settings
 from hermes_profile.paths import initialize_settings, upsert_local_location
 from hermes_profile.profiles import create_profile
@@ -33,12 +34,14 @@ def test_tui_location_home_lists_local_and_opens_profiles(tmp_path: Path) -> Non
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, LocationHomeScreen)
+            assert app.export_screenshot().count(f"v{__version__}") >= 2
             listing = app.screen.query_one("#location-list", ListView)
             assert len(listing.children) == 1
             await pilot.press("enter")
             await pilot.pause()
             profiles = app.query_one("#profiles", ListView)
             assert len(profiles.children) == 1
+            assert app.export_screenshot().count(f"v{__version__}") >= 2
             await pilot.press("r")
 
     asyncio.run(run())
@@ -440,5 +443,19 @@ def test_ssh_setup_runs_init_in_a_worker(tmp_path: Path, monkeypatch: object) ->
             assert all(button.disabled for button in screen.query(Button))
             finish.set()
             await pilot.pause()
+
+    asyncio.run(run())
+
+
+def test_setup_renders_version_on_start_and_local_form(tmp_path: Path) -> None:
+    app = SetupApp(tmp_path / "config.yaml")
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app.export_screenshot().count(f"v{__version__}") >= 2
+            await pilot.click("#choose-local")
+            await pilot.pause()
+            assert app.export_screenshot().count(f"v{__version__}") >= 2
 
     asyncio.run(run())

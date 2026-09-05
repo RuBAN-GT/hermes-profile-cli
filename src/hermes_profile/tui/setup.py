@@ -6,9 +6,10 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Input, Label, LoadingIndicator
+from textual.widgets import Button, Footer, Header, Input, Label, LoadingIndicator
 from textual.worker import Worker, WorkerState
 
+from hermes_profile import __version__
 from hermes_profile.i18n import next_language, set_language, t
 from hermes_profile.models import Host
 from hermes_profile.paths import derived_child, initialize_settings, upsert_host
@@ -71,7 +72,7 @@ class SetupApp(App[Path | None]):
     """First-run setup for a local or SSH-managed Hermes installation."""
 
     CSS = SETUP_CSS
-    TITLE = "Hermes Profile Setup"
+    TITLE = f"Hermes Profile Setup v{__version__}"
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("ctrl+t", "cycle_theme", "Theme"),
@@ -98,6 +99,7 @@ class SetupApp(App[Path | None]):
         self.query_one("#choose-ssh", Button).label = t("another_ssh")
 
     def compose(self) -> ComposeResult:
+        yield Header()
         with Vertical(id="setup"):
             yield Label(t("setup_title"), id="setup-title")
             yield Label(t("setup_subtitle"), id="setup-subtitle")
@@ -156,6 +158,7 @@ class LocalSetupScreen(_SetupForm):
         self._managed = DEFAULT_LOCAL_MANAGED
 
     def compose(self) -> ComposeResult:
+        yield Header()
         with Vertical(id="setup"):
             yield Label("Local setup", id="setup-title")
             yield Label("Where files live on this machine:", id="setup-subtitle")
@@ -236,6 +239,7 @@ class LocalSetupScreen(_SetupForm):
 
 class RemoteSetupScreen(_SetupForm):
     def compose(self) -> ComposeResult:
+        yield Header()
         with Vertical(id="setup"):
             yield Label("Remote SSH setup", id="setup-title")
             yield Label(
