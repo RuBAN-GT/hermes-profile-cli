@@ -130,6 +130,37 @@ Hermes, then apply again. Use `apply NAME --discard-runtime` only when you inten
 to replace those changes with the declared fragments. Bulk apply is not atomic:
 profiles processed before an error remain applied.
 
+### Variables in fragments
+
+Use `${NAME}` in YAML string values and `NAME=value` environment fragments to
+reuse values from the manager process environment or previously assembled env
+fragments. Environment fragments are resolved first, so their values are also
+available to YAML fragments:
+
+```dotenv
+# env/profiles/work.private.env
+HERMES_HOME=${HERMES_PROFILE_DIR}
+```
+
+```yaml
+# config/profiles/work.yaml
+terminal:
+  cwd: "${HERMES_PROFILE_DIR}/workspace"
+  docker_volumes:
+    - "${HERMES_PROFILE_DIR}/workspace:/workspace:rw"
+```
+
+The manager supplies these values when the process environment does not define
+them: `HERMES_PROFILE`, `HERMES_PROFILE_DIR`, `HERMES_PROFILES_DIR`,
+`HERMES_FRAGMENTS_DIR`, and `HERMES_MANAGED_DIR`. They are available for
+rendering but are not added to the generated `.env` unless a fragment declares
+them. `HERMES_HOME` is never inferred.
+
+Use `$${NAME}` to preserve a literal `${NAME}`. Missing variables and expanded
+env values containing a newline or NUL stop rendering. Expansion is single-pass:
+substituted text is not expanded again. Previews and diffs redact values that
+came from interpolation, while `apply` writes the resolved values.
+
 ## More help
 
 - [Configuration, fragments, drift, and secrets](docs/guide.md#how-it-works)

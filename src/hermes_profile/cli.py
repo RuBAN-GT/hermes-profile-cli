@@ -306,7 +306,7 @@ def _run_local(arguments: argparse.Namespace, settings: Settings) -> dict[str, A
     if arguments.command == "status":
         return status(settings, arguments.name)
     if arguments.command == "render":
-        config, environment = render_profile(settings, arguments.name)
+        config, environment = render_profile(settings, arguments.name, preview=True)
         return {"config": config, "environment_count": len(environment), "valid": True}
     if arguments.command == "preflight":
         return preflight(settings, arguments.name)

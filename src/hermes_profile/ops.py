@@ -231,7 +231,7 @@ class Ops:
                 "config": config,
                 "environment_count": result.get("environment_count", 0),
             }
-        config, environment = render_profile(ops._local(), name)
+        config, environment = render_profile(ops._local(), name, preview=True)
         return {
             "config": config,
             "environment_count": len(environment),

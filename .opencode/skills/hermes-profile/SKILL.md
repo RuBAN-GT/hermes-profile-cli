@@ -147,6 +147,31 @@ keys; YAML maps merge recursively, while YAML lists and scalars replace the
 earlier value. When changing a list such as `terminal.docker_forward_env`,
 declare the complete desired list in the latest applicable fragment.
 
+Fragment YAML string values and env values expand `${VAR}` once, without shell
+evaluation or rescanning inserted text. Escape existing literal `${VAR}` as
+`$${VAR}` when importing runtime into fragments. Keys and YAML types do not
+expand. Env resolves first against one process environment snapshot plus earlier
+assignments, including earlier lines in the same fragment; last assignment wins.
+`TOKEN=${TOKEN}` uses the process or previous value, not a recursive reference.
+YAML uses final env including `runtime.env`. Runtime env/YAML overlays stay literal;
+fragment-only rendering ignores both overlays.
+
+Lookup-only fallbacks: `HERMES_PROFILE` is the profile name;
+`HERMES_PROFILE_DIR`, `HERMES_PROFILES_DIR`, `HERMES_FRAGMENTS_DIR`, and
+`HERMES_MANAGED_DIR` come from configured roots. Process values, including empty
+ones, take precedence; env fragments can override them. Do not auto-set
+`HERMES_HOME` or emit defaults into `.env` without explicit assignments.
+Missing variables and CR/LF/NUL in expanded env values fail with value-free errors.
+
+Preview APIs redact substituted YAML paths on both sides of preflight diffs;
+affected lists are hidden completely to protect old/reordered entries. Computed
+fallbacks and unrelated config remain visible. Apply writes actual values and
+retains historical paths (not values) in `state/interpolation.yaml`; preserve this
+file. Changed redacted values use `<redacted: changed>` in preflight; equal values
+produce no diff. Hardcoded secrets and old substitutions without metadata are not
+automatically protected. Verify the remote CLI supports this behavior before
+relying on SSH previews.
+
 Preserve list order, value types, and existing settings when importing runtime.
 Detect removed keys as well as additions and changes: `reconcile` does not
 support deleting keys. Do not assume it produces an exact runtime migration.
@@ -169,7 +194,8 @@ because two profiles currently contain the same value.
 4. Run `hermes-profile preflight NAME` and review both configuration and env
    diffs by names/paths only.
    Validate YAML and env syntax before apply. Capture/redact CLI output when
-   YAML can contain credentials; env redaction does not sanitize YAML secrets.
+    YAML can contain hardcoded credentials; interpolation redaction is not a
+    general secret detector.
    Stop on unexpected diffs. For an exact runtime import, require semantic
    equality of config and env before apply, including list order.
 5. If current runtime files differ from `state/applied-*`, explain the drift.

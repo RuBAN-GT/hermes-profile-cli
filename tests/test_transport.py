@@ -206,6 +206,33 @@ def test_ssh_lists_runtime_profiles_without_remote_cli(
     assert any("command -v" in item or "[ -x " in item for item in calls)
 
 
+def test_ssh_preview_redacts_historical_interpolation_without_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(command, **kwargs):
+        remote = command[-1]
+        if "command -v" in remote:
+            return subprocess.CompletedProcess(command, 0, stdout="no\n", stderr="")
+        assert "state/interpolation.yaml" in remote
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                "__CONFIG__\nplain: visible\nitems: [old-secret]\n"
+                "__END_CONFIG__\n__ENV_COUNT__1\n"
+                "__REDACTIONS__\npaths: [[items, token]]\n__END_REDACTIONS__\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = SshTransport(_host()).action("tyrion", "render")
+    assert result == {
+        "config": {"plain": "visible", "items": "<redacted>"},
+        "environment_count": 1,
+    }
+
+
 def test_ssh_preview_reads_remote_config_without_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

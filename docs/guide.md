@@ -68,6 +68,78 @@ start with a letter or digit, and have a maximum length of 63 characters.
 
 ## Daily Operations
 
+### Fragment Interpolation
+
+YAML string values and env fragment values support `${VAR}` using environment
+variable names (`[A-Za-z_][A-Za-z0-9_]*`). This is not shell evaluation: quotes in
+env values remain literal, and `$VAR`, command substitution, and shell default
+expressions are not interpreted. YAML is parsed before expansion, so inserted
+text stays a string, not YAML syntax. Keys, scalar types, list order, and mapping
+order are unchanged by expansion. Existing merge and output sorting rules still
+apply. Fragment references in `profile.yaml` are not expanded.
+
+Env fragments are assembled first, in declaration order. Each assignment can
+reference the process environment or earlier resolved assignments, including
+earlier lines in the same fragment. Later assignments win; `TOKEN=${TOKEN}` reads
+the process or previous assignment, not itself. Forward references to later
+assignments are not supported. The process environment is snapshotted once per
+render and never modified.
+
+When absent from the process environment, these lookup-only defaults are provided:
+
+| Variable | Fallback |
+| --- | --- |
+| `HERMES_PROFILE` | Profile name |
+| `HERMES_PROFILE_DIR` | `profiles_dir / name` |
+| `HERMES_PROFILES_DIR` | Configured `profiles_dir` |
+| `HERMES_FRAGMENTS_DIR` | Configured `fragments_dir` |
+| `HERMES_MANAGED_DIR` | Configured `managed_dir` |
+
+Explicit empty process values are preserved. Env assignments can override these
+defaults. Neither defaults nor other process variables are automatically emitted
+into `.env`; a fragment must declare an assignment. `HERMES_HOME` has no automatic
+fallback. Declare it explicitly if required, for example:
+
+```text
+HERMES_HOME=${HERMES_PROFILE_DIR}
+TOKEN=${TOKEN}
+ENDPOINT=https://example.invalid/${HERMES_PROFILE}
+```
+
+YAML fragments use the final assembled env, including literal `runtime.env`
+overrides. `runtime-config.yaml` is then merged literally. Neither runtime file
+is expanded, including escape sequences. Fragment-only rendering
+(`include_runtime=False`, also used by `apply --discard-runtime`) ignores both.
+
+Expansion is single-pass: inserted `${OTHER}` text is never rescanned. Write
+`$${VAR}` in a fragment to produce literal `${VAR}`, even if VAR is missing.
+**Migration:** existing literal `${VAR}` strings in fragments must now be escaped
+as `$${VAR}` to retain their old behavior. Do not escape runtime overlays.
+Missing-variable errors name only the missing variable. Expanded env assignments
+containing CR, LF, or NUL are rejected without displaying their values.
+
+### Preview Safety
+
+CLI, operations, MCP, and TUI previews redact YAML values substituted from process
+or assembled env variables. Computed fallback names/paths remain visible unless
+overridden. Environment values remain hidden. Preflight redacts both the old and
+new sides of both config diffs. Changed redacted values use `<redacted: changed>`
+on the proposed side; equal values produce no diff. Lists containing substitutions
+are redacted as a whole to protect
+removed or reordered entries. Unrelated configuration is not hidden.
+
+Apply writes actual values, with private file permissions, and records paths only
+in `state/interpolation.yaml` before writing config. Historical paths are retained
+to protect removed fields and literal runtime overrides on subsequent previews.
+Keep this metadata with the profile; deleting it loses historical protection.
+Live-file fallback previews also honor it. SSH CLI rendering requires an updated
+remote CLI; the environment used for interpolation is that remote process's env.
+
+This is provenance-based redaction, not a general secret detector. Hardcoded YAML
+secrets, secrets moved to unrelated paths outside the manager, and historical
+substitutions without retained metadata cannot be reliably identified. Review
+those files privately rather than assuming every YAML preview is sanitized.
+
 | Command | Use it to |
 | --- | --- |
 | `list` | list known profiles |

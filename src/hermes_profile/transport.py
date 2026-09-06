@@ -13,6 +13,8 @@ from hermes_profile.models import Host, Settings
 from hermes_profile.paths import PROFILE_NAME
 from hermes_profile.profiles import create_profile, delete_profile, list_profiles
 from hermes_profile.service import (
+    _redact_config,
+    _redaction_paths,
     apply,
     apply_all,
     preflight,
@@ -75,7 +77,7 @@ class LocalTransport:
             directory = self.settings.profiles_dir / name
             if not (directory / "profile.yaml").is_file():
                 return _existing_profile_preview(directory, name)
-            config, environment = render_profile(self.settings, name)
+            config, environment = render_profile(self.settings, name, preview=True)
             return {"config": config, "environment_count": len(environment)}
         if action == "reconcile":
             return {"reconciled": reconcile(self.settings, name)}
@@ -406,6 +408,12 @@ if [ -f "$d/.env" ]; then
   echo -n __ENV_COUNT__
   grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' "$d/.env" || true
 fi
+if [ -f "$d/state/interpolation.yaml" ]; then
+  echo __REDACTIONS__
+  cat "$d/state/interpolation.yaml"
+  echo
+  echo __END_REDACTIONS__
+fi
 """
         output = self._ssh_shell(script).stdout
         if "MISSING" in output:
@@ -421,6 +429,12 @@ fi
         if "__ENV_COUNT__" in output:
             raw = output.split("__ENV_COUNT__", 1)[1].splitlines()[0].strip()
             env_count = int(raw or "0")
+        if "__REDACTIONS__" in output:
+            block = output.split("__REDACTIONS__", 1)[1].split(
+                "__END_REDACTIONS__", 1
+            )[0]
+            paths = (yaml.safe_load(block) or {}).get("paths", [])
+            config = _redact_config(config, paths)
         return {"config": config, "environment_count": env_count}
 
     def ensure_private_dir(self, path: Path) -> None:
@@ -539,7 +553,10 @@ def _existing_profile_preview(directory: Path, name: str) -> dict[str, Any]:
         if env_path.is_file()
         else 0
     )
-    return {"config": config, "environment_count": env_count}
+    return {
+        "config": _redact_config(config, _redaction_paths(directory)),
+        "environment_count": env_count,
+    }
 
 
 def parse_ssh_target(value: str) -> tuple[str | None, str, int | None]:

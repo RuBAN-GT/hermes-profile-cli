@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/) and
 [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [Unreleased]
+
+### Added
+
+- Single-pass `${VAR}` interpolation in parsed YAML values and ordered env
+  fragments, with lookup-only profile/path defaults and literal runtime overlays.
+- Provenance-based YAML preview and preflight redaction, including historical
+  paths and removed/reordered list entries; apply still writes actual values.
+
+### Changed
+
+- Literal `${VAR}` in fragments must be escaped as `$${VAR}`. Missing variables
+  and CR/LF/NUL in expanded env assignments fail without exposing values.
+
 ## [0.8.0] - 2026-09-05
 
 ### Added
